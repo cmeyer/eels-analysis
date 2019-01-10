@@ -193,6 +193,110 @@ class EELSQuantificationDisplay(Observable.Observable):
         return self.__eels_edge_displays
 
 
+class EELSEdgeDisplayView:
+
+    def __init__(self, eels_edge: EELSEdge):
+        self.__eels_edge = eels_edge
+        self.background_data_item = None
+        self.signal_data_item = None
+        self.signal_interval_graphic = None
+        self.fit_interval_graphics = list()
+        self.computation = None
+
+    def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
+
+        # create new data items for signal and background, add them to the document model
+        if self.signal_data_item:
+            signal_data_item = self.signal_data_item
+        else:
+            signal_data_item = DataItem.DataItem()
+            document_model.append_data_item(signal_data_item, auto_display=False)
+            signal_data_item.title = f"{eels_data_item.title} Signal"
+        if self.background_data_item:
+            background_data_item = self.background_data_item
+        else:
+            background_data_item = DataItem.DataItem()
+            document_model.append_data_item(background_data_item, auto_display=False)
+            background_data_item.title = f"{eels_data_item.title} Background"
+
+        # create display data channels and display layers for signal and background
+        background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
+        if not background_display_data_channel:
+            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(background_data_item))
+            background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
+            background_data_item_index = eels_display_item.display_data_channels.index(background_display_data_channel)
+            eels_display_item.insert_display_layer(0, data_index=background_data_item_index)
+            eels_display_item._set_display_layer_property(0, "label", _("Background"))
+            eels_display_item._set_display_layer_property(0, "fill_color", "rgba(255, 0, 0, 0.3)")
+
+        signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
+        if not signal_display_data_channel:
+            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(signal_data_item))
+            signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
+            signal_data_item_index = eels_display_item.display_data_channels.index(signal_display_data_channel)
+            eels_display_item.insert_display_layer(0, data_index=signal_data_item_index)
+            eels_display_item._set_display_layer_property(0, "label", _("Signal"))
+            eels_display_item._set_display_layer_property(0, "fill_color", "lime")
+
+        # useful values
+        eels_data_len = eels_data_item.data_shape[-1]
+        eels_calibration = eels_data_item.dimensional_calibrations[-1]
+
+        # create the signal interval graphic
+        if self.signal_interval_graphic:
+            signal_interval_graphic = self.signal_interval_graphic
+        else:
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = self.__eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
+            eels_display_item.add_graphic(signal_interval_graphic)
+
+        # create the fit interval graphics
+        fit_interval_graphics = self.fit_interval_graphics
+        for index, fit_eels_interval in enumerate(self.__eels_edge.fit_eels_intervals):
+            if len(fit_interval_graphics) <= index:
+                fit_interval_graphic = Graphics.IntervalGraphic()
+                eels_display_item.add_graphic(fit_interval_graphic)
+                fit_interval_graphics.append(fit_interval_graphic)
+            else:
+                fit_interval_graphic = fit_interval_graphics[index]
+            fit_interval_graphic.interval = fit_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
+
+        # create the computation to compute background and signal
+        if self.computation:
+            computation = self.computation
+        else:
+            computation = document_model.create_computation()
+            computation.processing_id = "eels.background_subtraction2"
+            computation.source = eels_display_item
+            computation.create_object("eels_spectrum_data_item", document_model.get_object_specifier(eels_data_item))
+            computation.create_objects("fit_interval_graphics", [document_model.get_object_specifier(fit_interval_graphic) for fit_interval_graphic in fit_interval_graphics])
+            computation.create_object("signal_interval_graphic", document_model.get_object_specifier(signal_interval_graphic))
+            computation.create_result("subtracted", document_model.get_object_specifier(signal_data_item))
+            computation.create_result("background", document_model.get_object_specifier(background_data_item))
+            document_model.append_computation(computation)
+
+        # enable the legend display
+        eels_display_item.set_display_property("legend_position", "top-right")
+
+        # store values
+        self.background_data_item = background_data_item
+        self.signal_data_item = signal_data_item
+        self.signal_interval_graphic = signal_interval_graphic
+        self.fit_interval_graphics = fit_interval_graphics
+        self.computation = computation
+
+    def hide(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem) -> None:
+        document_model.remove_computation(self.computation)
+        eels_display_item.remove_graphic(self.signal_interval_graphic)
+        for graphic in self.fit_interval_graphics:
+            eels_display_item.remove_graphic(graphic)
+        # these items should auto remove with the computation
+        if self.background_data_item in document_model.data_items:
+            document_model.remove_data_item(self.background_data_item)
+        if self.signal_data_item in document_model.data_items:
+            document_model.remove_data_item(self.signal_data_item)
+
+
 class EELSQuantificationController:
     """Controller between a line plot display item and an EELS quantification display.
 
@@ -208,22 +312,30 @@ class EELSQuantificationController:
         self.__eels_data_item = eels_data_item
         self.__eels_quantification_display = eels_quantification_display
         self.__eels_quantification = eels_quantification_display.eels_quantification
+        self.__eels_edge_views_map = dict()
 
         # watch for EELS edge displays added or removed and configure appropriately
 
         def eels_edge_display_inserted(key, value, before_index):
             if key == "eels_edge_displays":
-                self.__sychronize_eels_edge_displays()
+                eels_edge_display = value
+                eels_edge = eels_edge_display.eels_edge
+                eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
+                if not eels_edge_display_view:
+                    eels_edge_display_view = EELSEdgeDisplayView(eels_edge)
+                    self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
+                eels_edge_display_view.show(document_model, eels_display_item, eels_data_item)
 
         def eels_edge_display_removed(key, value, index):
             if key == "eels_edge_displays":
-                self.__sychronize_eels_edge_displays()
+                eels_edge_display = value
+                eels_edge = eels_edge_display.eels_edge
+                eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
+                if eels_edge_display_view:
+                    eels_edge_display_view.hide(document_model, eels_display_item)
 
         self.__eels_quantification_display_item_inserted_event_listener = self.__eels_quantification_display.item_inserted_event.listen(eels_edge_display_inserted)
         self.__eels_quantification_display_item_removed_event_listener = self.__eels_quantification_display.item_removed_event.listen(eels_edge_display_removed)
-
-        # sychronize the eels display item
-        self.__sychronize_eels_edge_displays()
 
     def close(self):
         self.__eels_quantification_display_item_inserted_event_listener.close()
@@ -257,100 +369,13 @@ class EELSQuantificationController:
         # create the EELS edge object
         eels_edge = EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_ahead_eels_interval, fit_behind_eels_interval])
 
+        # add the EELS edge display view
+        eels_edge_display_view = EELSEdgeDisplayView(eels_edge)
+        eels_edge_display_view.signal_interval_graphic = signal_interval_graphic
+        self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
+
         # add the EELS edge object to the quantification object
         self.add_eels_edge(eels_edge)
 
         # return the edge
         return eels_edge
-
-    def __sychronize_eels_edge_displays(self):
-        # synchronizes EELS edge displays to data items, display data channels, display layers, and computations.
-
-        # first ensure there is a display layer for each display data channel
-        self.__eels_display_item.populate_display_layers()
-
-        # next remove any existing computation associated with this display item
-        for computation in copy.copy(self.__document_model.computations):
-            if computation.source == self.__eels_display_item:
-                self.__document_model.remove_computation(computation)
-
-        # useful values
-        eels_data_len = self.__eels_data_item.data_shape[-1]
-        eels_calibration = self.__eels_data_item.dimensional_calibrations[-1]
-
-        # for each visible EELS edge display, ensure it has a display data channel for background and signal,
-        # populating the new display layers along the way.
-        data_index = 1  # index 0 is the original data
-        interval_graphics_index = 0
-        new_display_layers = list()
-        for eels_edge_display in self.__eels_quantification_display.eels_edge_displays:
-            if eels_edge_display.is_visible:
-
-                # create data items and display data channels for each visible EELS edge display
-                if len(self.__eels_display_item.display_data_channels) < data_index + 2:
-                    # create new data items for signal and background, add them to the document model
-                    signal_data_item = DataItem.DataItem()
-                    background_data_item = DataItem.DataItem()
-                    signal_data_item.title = f"{self.__eels_data_item.title} Signal"
-                    background_data_item.title = f"{self.__eels_data_item.title} Background"
-                    self.__document_model.append_data_item(signal_data_item, auto_display=False)
-                    self.__document_model.append_data_item(background_data_item, auto_display=False)
-                    # create a display data channel for each one in the eels display item
-                    self.__eels_display_item.append_display_data_channel_for_data_item(signal_data_item)
-                    self.__eels_display_item.append_display_data_channel_for_data_item(background_data_item)
-                else:
-                    signal_data_item = DataItem.DataItem()
-                    background_data_item = DataItem.DataItem()
-
-                # create the display layers
-                new_display_layers.append({"label": _("Signal"), "data_index": data_index, "fill_color": "#0F0"})
-                new_display_layers.append({"label": _("Background"), "data_index": data_index + 1, "fill_color": "rgba(255, 0, 0, 0.3)"})
-                data_index += 2
-
-                # create the interval graphics
-                fit_interval_graphics = list()
-                fit_interval_count = len(eels_edge_display.eels_edge.fit_eels_intervals)
-                if len(self.__eels_display_item.graphics) < interval_graphics_index + 1 + fit_interval_count:
-                    signal_interval_graphic = Graphics.IntervalGraphic()
-                    signal_interval_graphic.interval = eels_edge_display.eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
-                    self.__eels_display_item.add_graphic(signal_interval_graphic)
-                    for fit_eels_interval in eels_edge_display.eels_edge.fit_eels_intervals:
-                        fit_interval_graphic = Graphics.IntervalGraphic()
-                        fit_interval_graphic.interval = fit_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
-                        self.__eels_display_item.add_graphic(fit_interval_graphic)
-                        fit_interval_graphics.append(fit_interval_graphic)
-                else:
-                    signal_interval_graphic = self.__eels_display_item.graphics[interval_graphics_index]
-                    signal_interval_graphic.interval = eels_edge_display.eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
-                    for index in range(fit_interval_count):
-                        fit_interval_graphic = self.__eels_display_item.graphics[interval_graphics_index + 1 + index]
-                        fit_interval_graphic.interval = eels_edge_display.eels_edge.fit_eels_intervals[index].to_fractional_interval(eels_data_len, eels_calibration)
-                        fit_interval_graphics.append(fit_interval_graphic)
-                interval_graphics_index += 1 + fit_interval_count
-
-                # create the associated computations
-                computation = self.__document_model.create_computation()
-                computation.processing_id = "eels.background_subtraction2"
-                computation.source = self.__eels_display_item
-                computation.create_object("eels_spectrum_data_item", self.__document_model.get_object_specifier(self.__eels_data_item))
-                computation.create_objects("fit_interval_graphics", [self.__document_model.get_object_specifier(fit_interval_graphic) for fit_interval_graphic in fit_interval_graphics])
-                computation.create_object("signal_interval_graphic", self.__document_model.get_object_specifier(signal_interval_graphic))
-                computation.create_result("subtracted", self.__document_model.get_object_specifier(signal_data_item))
-                computation.create_result("background", self.__document_model.get_object_specifier(background_data_item))
-                self.__document_model.append_computation(computation)
-
-        # remove extra display data channels
-        while len(self.__eels_display_item.display_data_channels) > data_index:
-            self.__eels_display_item.remove_display_data_channel(self.__eels_display_item.display_data_channels[data_index])
-
-        # configure the display layer for the source spectrum
-        new_display_layers.append({"label": _("Data"), "data_index": 0, "fill_color": "#1E90FF"})
-
-        # replace the display layers on the eels display item
-        self.__eels_display_item.display_layers = new_display_layers
-
-        # enable/disable the caption
-        if len(new_display_layers) > 0:
-            self.__eels_display_item.set_display_property("legend_position", "top-right")
-        else:
-            self.__eels_display_item.set_display_property("legend_position", None)

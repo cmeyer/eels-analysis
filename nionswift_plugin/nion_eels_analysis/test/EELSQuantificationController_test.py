@@ -1,0 +1,62 @@
+# standard libraries
+import contextlib
+import unittest
+
+# local libraries
+from nionswift_plugin.nion_eels_analysis import EELSQuantificationController
+
+# third party libraries
+import numpy
+
+# local libraries
+from nion.data import Calibration
+from nion.data import DataAndMetadata
+from nion.swift.model import DataItem
+from nion.swift.model import DocumentModel
+from nion.swift.model import Graphics
+
+
+class TestEELSQuantificationController(unittest.TestCase):
+
+    def setUp(self):
+        pass
+
+    def tearDown(self):
+        pass
+
+    def __create_spectrum(self) -> DataItem.DataItem:
+        data = numpy.random.uniform(10, 1000, 1024).astype(numpy.float32)
+        intensity_calibration = Calibration.Calibration(units="~")
+        dimensional_calibrations = [Calibration.Calibration(scale=2.0, units="eV")]
+        data_descriptor = DataAndMetadata.DataDescriptor(is_sequence=False, collection_dimension_count=0, datum_dimension_count=1)
+        xdata = DataAndMetadata.new_data_and_metadata(data, intensity_calibration=intensity_calibration, dimensional_calibrations=dimensional_calibrations, data_descriptor=data_descriptor)
+        return DataItem.new_data_item(xdata)
+
+    def test_adding_removing_edge_tracks_corresponding_edge_displays(self):
+        q = EELSQuantificationController.EELSQuantification()
+        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
+        self.assertEqual(0, len(qd.eels_edge_displays))
+        q.append_edge(EELSQuantificationController.EELSEdge())
+        self.assertEqual(1, len(qd.eels_edge_displays))
+        q.remove_edge(0)
+        self.assertEqual(0, len(qd.eels_edge_displays))
+
+    def test_adding_signal_configures_display_layers(self):
+        q = EELSQuantificationController.EELSQuantification()
+        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
+            eels_display_item.add_graphic(signal_interval_graphic)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
+            self.assertEqual(3, len(eels_display_item.display_data_channels))
+            self.assertEqual(3, len(eels_display_item.display_layers))
+
+    # test_changing_interval_graphic_updates_eels_edge_interval
+    # test_extra_graphic_intervals_are_retained_when_adding_or_removing_edges

@@ -200,6 +200,13 @@ class EELSQuantificationDisplay(Observable.Observable):
         self.__eels_quantification_item_removed_event_listener.close()
         self.__eels_quantification_item_removed_event_listener = None
 
+    def insert_eels_edge_display(self, before_index: int, eels_edge_display: EELSEdgeDisplay) -> None:
+        self.__eels_edge_displays.insert(before_index, eels_edge_display)
+        self.notify_insert_item("eels_edge_displays", eels_edge_display, before_index)
+
+    def append_eels_edge_display(self, eels_edge_display: EELSEdgeDisplay) -> None:
+        self.insert_eels_edge_display(len(self.__eels_edge_displays), eels_edge_display)
+
     @property
     def eels_quantification(self) -> EELSQuantification:
         return self.__eels_quantification
@@ -266,6 +273,7 @@ class IntervalListConnection:
 
         remove_blocked = [False]  # argh.
         def remove_fit_eels_interval(index: int) -> None:
+            # this message comes from the library.
             remove_blocked[0] = True
 
             # remove edge; but block notifications are blocked. ugly.
@@ -277,9 +285,13 @@ class IntervalListConnection:
             self.__fit_interval_graphic_about_to_be_removed_listeners[index].close()
             del self.__fit_interval_graphic_about_to_be_removed_listeners[index]
 
-            remove_blocked[0] = True
+            # keep the fit interval graphics list up to date
+            del self.__fit_interval_graphics[index]
+
+            remove_blocked[0] = False
 
         def fit_eels_interval_inserted(key: str, value, before_index: int) -> None:
+            # this message comes from the EELS edge
             if key == "fit_eels_intervals":
                 fit_eels_interval = value
 
@@ -299,18 +311,18 @@ class IntervalListConnection:
                 computation.insert_item_into_objects("fit_interval_graphics", before_index, document_model.get_object_specifier(fit_interval_graphic))
 
         def fit_eels_interval_removed(key: str, value, index: int) -> None:
+            # this message comes from the EELS edge
             if key == "fit_eels_intervals" and not remove_blocked[0]:
-                # remove the interval from computation
-                computation.remove_item_from_objects("fit_interval_graphics", index)
-
                 # unbind interval graphic from fit eels interval
                 self.__fit_interval_graphic_property_changed_listeners[index].close()
                 del self.__fit_interval_graphic_property_changed_listeners[index]
                 self.__fit_interval_graphic_about_to_be_removed_listeners[index].close()
                 del self.__fit_interval_graphic_about_to_be_removed_listeners[index]
 
-                # remove interval graphic on the display item
+                # remove interval graphic on the display item. this will also remove the graphic from the computation.
                 eels_display_item.remove_graphic(self.__fit_interval_graphics[index])
+
+                # keep the fit interval graphics list up to date
                 del self.__fit_interval_graphics[index]
 
         def fit_eels_interval_value_changed(key: str, value, index: int) -> None:
@@ -349,8 +361,9 @@ class IntervalListConnection:
 
 class EELSEdgeDisplayView:
 
-    def __init__(self, eels_edge: EELSEdge):
-        self.__eels_edge = eels_edge
+    def __init__(self, eels_edge_display: EELSEdgeDisplay):
+        self.__eels_edge_display = eels_edge_display
+        self.__eels_edge = eels_edge_display.eels_edge
         self.background_data_item = None
         self.signal_data_item = None
         self.signal_interval_graphic = None
@@ -358,6 +371,7 @@ class EELSEdgeDisplayView:
         self.computation = None
         self.__signal_interval_connection = None
         self.__interval_list_connection = None
+        self.__signal_interval_about_to_close_connection = None
 
     def close(self):
         if self.__signal_interval_connection:
@@ -366,6 +380,9 @@ class EELSEdgeDisplayView:
         if self.__interval_list_connection:
             self.__interval_list_connection.close()
             self.__interval_list_connection = None
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
 
     def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
 
@@ -414,6 +431,17 @@ class EELSEdgeDisplayView:
             signal_interval_graphic.interval = self.__eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
             eels_display_item.add_graphic(signal_interval_graphic)
 
+        # watch for signal graphic being deleted and treat it like hiding
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
+
+        def signal_interval_graphic_removed():
+            self.signal_interval_graphic = None
+            self.hide(document_model, eels_display_item)
+
+        self.__signal_interval_about_to_close_connection = signal_interval_graphic.about_to_be_removed_event.listen(signal_interval_graphic_removed)
+
         # bind signal interval graphic to signal interval
         if self.__signal_interval_connection:
             self.__signal_interval_connection.close()
@@ -461,6 +489,7 @@ class EELSEdgeDisplayView:
         self.signal_interval_graphic = signal_interval_graphic
         self.fit_interval_graphics = fit_interval_graphics
         self.computation = computation
+        self.__eels_edge_display.is_visible = True
 
     def hide(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem) -> None:
         if self.__signal_interval_connection:
@@ -469,15 +498,26 @@ class EELSEdgeDisplayView:
         if self.__interval_list_connection:
             self.__interval_list_connection.close()
             self.__interval_list_connection = None
-        document_model.remove_computation(self.computation)
-        eels_display_item.remove_graphic(self.signal_interval_graphic)
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
+        if self.computation:
+            document_model.remove_computation(self.computation)
+            self.computation = None
+        if self.signal_interval_graphic:
+            eels_display_item.remove_graphic(self.signal_interval_graphic)
+            self.signal_interval_graphic = None
         for graphic in self.fit_interval_graphics:
             eels_display_item.remove_graphic(graphic)
+        self.fit_interval_graphics = list()
         # these items should auto remove with the computation
         if self.background_data_item in document_model.data_items:
             document_model.remove_data_item(self.background_data_item)
+            self.background_data_item = None
         if self.signal_data_item in document_model.data_items:
             document_model.remove_data_item(self.signal_data_item)
+            self.signal_data_item = None
+        self.__eels_edge_display.is_visible = False
 
 
 class EELSQuantificationController:
@@ -496,6 +536,7 @@ class EELSQuantificationController:
         self.__eels_quantification_display = eels_quantification_display
         self.__eels_quantification = eels_quantification_display.eels_quantification
         self.__eels_edge_views_map = dict()
+        self.__pending_signal_interval_graphic = None
 
         # watch for EELS edge displays added or removed and configure appropriately
 
@@ -505,7 +546,9 @@ class EELSQuantificationController:
                 eels_edge = eels_edge_display.eels_edge
                 eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
                 if not eels_edge_display_view:
-                    eels_edge_display_view = EELSEdgeDisplayView(eels_edge)
+                    eels_edge_display_view = EELSEdgeDisplayView(eels_edge_display)
+                    eels_edge_display_view.signal_interval_graphic = self.__pending_signal_interval_graphic
+                    self.__pending_signal_interval_graphic = None
                     self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
                 eels_edge_display_view.show(document_model, eels_display_item, eels_data_item)
 
@@ -552,13 +595,16 @@ class EELSQuantificationController:
         # create the EELS edge object
         eels_edge = EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_ahead_eels_interval, fit_behind_eels_interval])
 
-        # add the EELS edge display view
-        eels_edge_display_view = EELSEdgeDisplayView(eels_edge)
-        eels_edge_display_view.signal_interval_graphic = signal_interval_graphic
-        self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
-
         # add the EELS edge object to the quantification object
+        # the pending signal interval graphic allows the created EELS display view to use existing signal interval graphic
+        self.__pending_signal_interval_graphic = signal_interval_graphic
         self.add_eels_edge(eels_edge)
 
         # return the edge
         return eels_edge
+
+    def hide_eels_edge(self, eels_edge: EELSEdge) -> None:
+        self.__eels_edge_views_map[eels_edge].hide(self.__document_model, self.__eels_display_item)
+
+    def show_eels_edge(self, eels_edge: EELSEdge) -> None:
+        self.__eels_edge_views_map[eels_edge].show(self.__document_model, self.__eels_display_item, self.__eels_data_item)

@@ -1,6 +1,6 @@
 """EELS Quantification objects.
 """
-import copy
+import functools
 import gettext
 import typing
 
@@ -10,14 +10,17 @@ from nion.swift.model import DataItem
 from nion.swift.model import DisplayItem
 from nion.swift.model import DocumentModel
 from nion.swift.model import Graphics
+from nion.swift.model import Symbolic
+from nion.utils import Binding
+from nion.utils import Event
 from nion.utils import Observable
 
 
 _ = gettext.gettext
 
 
-class EELSInterval(Observable.Observable):
-    """An interval."""
+class EELSInterval:
+    """An interval value object."""
 
     def __init__(self, start_ev: float=None, end_ev: float=None):
         super().__init__()
@@ -37,8 +40,6 @@ class EELSInterval(Observable.Observable):
     @start_ev.setter
     def start_ev(self, value: typing.Optional[float]) -> None:
         self.__start_ev = value
-        self.notify_property_changed("start_ev")
-        self.notify_property_changed("width_ev")
 
     @property
     def end_ev(self) -> typing.Optional[float]:
@@ -47,8 +48,6 @@ class EELSInterval(Observable.Observable):
     @end_ev.setter
     def end_ev(self, value: typing.Optional[float]) -> None:
         self.__end_ev = value
-        self.notify_property_changed("end_ev")
-        self.notify_property_changed("width_ev")
 
     @property
     def width_ev(self) -> typing.Optional[float]:
@@ -63,6 +62,18 @@ class EELSInterval(Observable.Observable):
         return start_pixel / data_len, end_pixel / data_len
 
 
+class EELSInterfaceToFractionalIntervalConverter:
+    def __init__(self, eels_data_len: int, eels_calibration: Calibration.Calibration):
+        self.__eels_data_len = eels_data_len
+        self.__eels_calibration = eels_calibration
+
+    def convert(self, eels_interval: EELSInterval) -> typing.Tuple[float, float]:
+        return eels_interval.to_fractional_interval(self.__eels_data_len, self.__eels_calibration)
+
+    def convert_back(self, interval: typing.Tuple[float, float]) -> EELSInterval:
+        return EELSInterval.from_fractional_interval(self.__eels_data_len, self.__eels_calibration, interval)
+
+
 class EELSEdge(Observable.Observable):
     """An edge is a signal interval, a list of fit intervals, and other edge identifying information."""
 
@@ -71,6 +82,7 @@ class EELSEdge(Observable.Observable):
         self.__signal_eels_interval = signal_eels_interval
         self.__fit_eels_intervals = fit_eels_intervals or list()
         self.__electron_shell = electron_shell
+        self.fit_eels_interval_changed = Event.Event()
 
     @property
     def signal_eels_interval(self) -> typing.Optional[EELSInterval]:
@@ -92,7 +104,7 @@ class EELSEdge(Observable.Observable):
 
     def insert_fit_eels_interval(self, index: int, interval: EELSInterval) -> None:
         self.__fit_eels_intervals.insert(index, interval)
-        self.notify_insert_item("fit_intervals", interval, index)
+        self.notify_insert_item("fit_eels_intervals", interval, index)
 
     def append_fit_eels_interval(self, interval: EELSInterval) -> None:
         self.insert_fit_eels_interval(len(self.__fit_eels_intervals), interval)
@@ -100,7 +112,11 @@ class EELSEdge(Observable.Observable):
     def remove_fit_eels_interval(self, index: int) -> None:
         fit_interval = self.__fit_eels_intervals[index]
         self.__fit_eels_intervals.remove(fit_interval)
-        self.notify_remove_item("fit_intervals", fit_interval, index)
+        self.notify_remove_item("fit_eels_intervals", fit_interval, index)
+
+    def set_fit_eels_interval(self, index: int, interval: EELSInterval) -> None:
+        self.__fit_eels_intervals[index] = interval
+        self.notify_item_value_changed("fit_eels_intervals", interval, index)
 
     @property
     def fit_eels_intervals(self) -> typing.List[EELSInterval]:
@@ -193,6 +209,144 @@ class EELSQuantificationDisplay(Observable.Observable):
         return self.__eels_edge_displays
 
 
+class IntervalConnection:
+
+    def __init__(self, eels_data_item: DataItem.DataItem, eels_edge: EELSEdge, interval_property_name: str, interval_graphic: Graphics.IntervalGraphic):
+        self.__interval_graphic_listener = None
+        self.__interval_binding = None
+
+        eels_data_len = eels_data_item.data_shape[-1]
+        eels_calibration = eels_data_item.dimensional_calibrations[-1]
+
+        converter = EELSInterfaceToFractionalIntervalConverter(eels_data_len, eels_calibration)
+        interval_binding = Binding.PropertyBinding(eels_edge, interval_property_name, converter=converter)
+
+        def update_interval(interval):
+            interval_graphic.interval = interval
+
+        interval_binding.target_setter = update_interval
+
+        blocked = [False]
+        def update_eels_interval(property_name):
+            if property_name == "interval" and not blocked[0]:
+                blocked[0] = True
+                interval_binding.update_source(interval_graphic.interval)
+                blocked[0] = False
+
+        self.__interval_graphic_listener = interval_graphic.property_changed_event.listen(update_eels_interval)
+        self.__interval_binding = interval_binding
+
+    def close(self):
+        if self.__interval_graphic_listener:
+            self.__interval_graphic_listener.close()
+            self.__interval_graphic_listener = None
+        if self.__interval_binding:
+            self.__interval_binding.close()
+            self.__interval_binding = None
+
+
+class IntervalListConnection:
+
+    def __init__(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem, eels_edge: EELSEdge, fit_interval_graphics: typing.List[Graphics.IntervalGraphic], computation: Symbolic.Computation):
+        self.__fit_interval_graphic_property_changed_listeners = list()
+        self.__fit_interval_graphic_about_to_be_removed_listeners = list()
+        self.__fit_interval_graphics = fit_interval_graphics
+
+        eels_data_len = eels_data_item.data_shape[-1]
+        eels_calibration = eels_data_item.dimensional_calibrations[-1]
+
+        converter = EELSInterfaceToFractionalIntervalConverter(eels_data_len, eels_calibration)
+
+        blocked = [False]
+        def update_fit_eels_interval(index: int, property_name: str) -> None:
+            if property_name == "interval" and not blocked[0]:
+                blocked[0] = True
+                eels_edge.set_fit_eels_interval(index, converter.convert_back(self.__fit_interval_graphics[index].interval))
+                blocked[0] = False
+
+        remove_blocked = [False]  # argh.
+        def remove_fit_eels_interval(index: int) -> None:
+            remove_blocked[0] = True
+
+            # remove edge; but block notifications are blocked. ugly.
+            eels_edge.remove_fit_eels_interval(index)
+
+            # unbind interval graphic from fit eels interval
+            self.__fit_interval_graphic_property_changed_listeners[index].close()
+            del self.__fit_interval_graphic_property_changed_listeners[index]
+            self.__fit_interval_graphic_about_to_be_removed_listeners[index].close()
+            del self.__fit_interval_graphic_about_to_be_removed_listeners[index]
+
+            remove_blocked[0] = True
+
+        def fit_eels_interval_inserted(key: str, value, before_index: int) -> None:
+            if key == "fit_eels_intervals":
+                fit_eels_interval = value
+
+                # create interval graphic on the display item
+                fit_interval_graphic = Graphics.IntervalGraphic()
+                eels_display_item.add_graphic(fit_interval_graphic)
+                self.__fit_interval_graphics.insert(before_index, fit_interval_graphic)
+
+                # update the interval graphic value
+                fit_interval_graphic.interval = fit_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
+
+                # bind interval graphic to the fit eels interval
+                self.__fit_interval_graphic_property_changed_listeners.insert(before_index, fit_interval_graphic.property_changed_event.listen(functools.partial(update_fit_eels_interval, before_index)))
+                self.__fit_interval_graphic_about_to_be_removed_listeners.insert(before_index, fit_interval_graphic.about_to_be_removed_event.listen(functools.partial(remove_fit_eels_interval, before_index)))
+
+                # add interval graphic to computation
+                computation.insert_item_into_objects("fit_interval_graphics", before_index, document_model.get_object_specifier(fit_interval_graphic))
+
+        def fit_eels_interval_removed(key: str, value, index: int) -> None:
+            if key == "fit_eels_intervals" and not remove_blocked[0]:
+                # remove the interval from computation
+                computation.remove_item_from_objects("fit_interval_graphics", index)
+
+                # unbind interval graphic from fit eels interval
+                self.__fit_interval_graphic_property_changed_listeners[index].close()
+                del self.__fit_interval_graphic_property_changed_listeners[index]
+                self.__fit_interval_graphic_about_to_be_removed_listeners[index].close()
+                del self.__fit_interval_graphic_about_to_be_removed_listeners[index]
+
+                # remove interval graphic on the display item
+                eels_display_item.remove_graphic(self.__fit_interval_graphics[index])
+                del self.__fit_interval_graphics[index]
+
+        def fit_eels_interval_value_changed(key: str, value, index: int) -> None:
+            if key == "fit_eels_intervals":
+                fit_eels_interval = value
+
+                # update the associated interval graphic
+                self.__fit_interval_graphics[index].interval = converter.convert(fit_eels_interval)
+
+        self.__item_inserted_event_listener = eels_edge.item_inserted_event.listen(fit_eels_interval_inserted)
+        self.__item_removed_event_listener = eels_edge.item_removed_event.listen(fit_eels_interval_removed)
+        self.__item_value_changed_event_listener = eels_edge.item_value_changed_event.listen(fit_eels_interval_value_changed)
+
+        # initial binding for fit interval graphics
+
+        for index, fit_interval_graphic in enumerate(fit_interval_graphics):
+            self.__fit_interval_graphic_property_changed_listeners.insert(index, fit_interval_graphic.property_changed_event.listen(functools.partial(update_fit_eels_interval, index)))
+            self.__fit_interval_graphic_about_to_be_removed_listeners.insert(index, fit_interval_graphic.about_to_be_removed_event.listen(functools.partial(remove_fit_eels_interval, index)))
+
+    def close(self):
+        self.__item_inserted_event_listener.close()
+        self.__item_inserted_event_listener = None
+        self.__item_removed_event_listener.close()
+        self.__item_removed_event_listener = None
+        self.__item_value_changed_event_listener.close()
+        self.__item_value_changed_event_listener = None
+
+        for interval_graphic_listener in self.__fit_interval_graphic_property_changed_listeners:
+            interval_graphic_listener.close()
+        self.__fit_interval_graphic_property_changed_listeners = None
+
+        for interval_graphic_listener in self.__fit_interval_graphic_about_to_be_removed_listeners:
+            interval_graphic_listener.close()
+        self.__fit_interval_graphic_about_to_be_removed_listeners = None
+
+
 class EELSEdgeDisplayView:
 
     def __init__(self, eels_edge: EELSEdge):
@@ -202,6 +356,16 @@ class EELSEdgeDisplayView:
         self.signal_interval_graphic = None
         self.fit_interval_graphics = list()
         self.computation = None
+        self.__signal_interval_connection = None
+        self.__interval_list_connection = None
+
+    def close(self):
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
 
     def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
 
@@ -250,6 +414,12 @@ class EELSEdgeDisplayView:
             signal_interval_graphic.interval = self.__eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
             eels_display_item.add_graphic(signal_interval_graphic)
 
+        # bind signal interval graphic to signal interval
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        self.__signal_interval_connection = IntervalConnection(eels_data_item, self.__eels_edge, "signal_eels_interval", signal_interval_graphic)
+
         # create the fit interval graphics
         fit_interval_graphics = self.fit_interval_graphics
         for index, fit_eels_interval in enumerate(self.__eels_edge.fit_eels_intervals):
@@ -275,6 +445,13 @@ class EELSEdgeDisplayView:
             computation.create_result("background", document_model.get_object_specifier(background_data_item))
             document_model.append_computation(computation)
 
+        # bind fit interval graphics to fit intervals
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
+
+        self.__interval_list_connection = IntervalListConnection(document_model, eels_display_item, eels_data_item, self.__eels_edge, fit_interval_graphics, computation)
+
         # enable the legend display
         eels_display_item.set_display_property("legend_position", "top-right")
 
@@ -286,6 +463,12 @@ class EELSEdgeDisplayView:
         self.computation = computation
 
     def hide(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem) -> None:
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
         document_model.remove_computation(self.computation)
         eels_display_item.remove_graphic(self.signal_interval_graphic)
         for graphic in self.fit_interval_graphics:

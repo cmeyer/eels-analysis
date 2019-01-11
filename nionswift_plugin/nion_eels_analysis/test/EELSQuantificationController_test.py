@@ -25,12 +25,20 @@ class TestEELSQuantificationController(unittest.TestCase):
         pass
 
     def __create_spectrum(self) -> DataItem.DataItem:
-        data = numpy.random.uniform(10, 1000, 1024).astype(numpy.float32)
+        data = numpy.random.uniform(10, 1000, 1000).astype(numpy.float32)
         intensity_calibration = Calibration.Calibration(units="~")
         dimensional_calibrations = [Calibration.Calibration(scale=2.0, units="eV")]
         data_descriptor = DataAndMetadata.DataDescriptor(is_sequence=False, collection_dimension_count=0, datum_dimension_count=1)
         xdata = DataAndMetadata.new_data_and_metadata(data, intensity_calibration=intensity_calibration, dimensional_calibrations=dimensional_calibrations, data_descriptor=data_descriptor)
         return DataItem.new_data_item(xdata)
+
+    def __compare_intervals(self, eels_data_item, eels_edge_interval, interval_graphic):
+        eels_edge_interval_int = int(eels_edge_interval.start_ev), int(eels_edge_interval.end_ev)
+        graphic_interval_int = int(eels_data_item.dimensional_calibrations[-1].convert_to_calibrated_value(
+            interval_graphic.interval[0] * eels_data_item.data_shape[-1])), int(
+            eels_data_item.dimensional_calibrations[-1].convert_to_calibrated_value(
+                interval_graphic.interval[1] * eels_data_item.data_shape[-1]))
+        self.assertEqual(eels_edge_interval_int, graphic_interval_int)
 
     def test_adding_removing_edge_tracks_corresponding_edge_displays(self):
         q = EELSQuantificationController.EELSQuantification()
@@ -89,19 +97,80 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_signal_interval_graphic_and_eels_edge_signal_interval_are_connected(self):
-        assert False
-
-    def test_signal_interval_graphic_and_eels_edge_signal_interval_are_connected(self):
-        assert False
+        q = EELSQuantificationController.EELSQuantification()
+        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
+            eels_display_item.add_graphic(signal_interval_graphic)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
+            self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
+            signal_interval_graphic.interval = (0.095, 0.105)
+            self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
+            eels_edge.signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=200, end_ev=220)
+            self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
 
     def test_fit_interval_graphic_and_eels_edge_fit_interval_are_connected(self):
-        assert False
+        q = EELSQuantificationController.EELSQuantification()
+        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
+            eels_display_item.add_graphic(signal_interval_graphic)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
+            eels_display_item.graphics[1].interval = (0.04, 0.05)
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
+            eels_edge.fit_eels_intervals[0] = EELSQuantificationController.EELSInterval(start_ev=40, end_ev=80)
+            self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
 
     def test_adding_or_removing_fit_interval_to_eels_edge_adds_or_removes_fit_interval_graphic(self):
-        assert False
+        q = EELSQuantificationController.EELSQuantification()
+        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
+            eels_display_item.add_graphic(signal_interval_graphic)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
+            self.assertEqual(2, len(eels_edge.fit_eels_intervals))
+            self.assertEqual(3, len(eels_display_item.graphics))
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[1], eels_display_item.graphics[2])
+            # first remove the fit interval from the edge
+            eels_edge.remove_fit_eels_interval(1)
+            self.assertEqual(1, len(eels_edge.fit_eels_intervals))
+            self.assertEqual(2, len(eels_display_item.graphics))
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
+            # now add the fit interval to back to the edge
+            eels_edge.append_fit_eels_interval(EELSQuantificationController.EELSInterval(start_ev=360, end_ev=400))
+            self.assertEqual(2, len(eels_edge.fit_eels_intervals))
+            self.assertEqual(3, len(eels_display_item.graphics))
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[1], eels_display_item.graphics[2])
+            # finally remove the fit interval graphic. should remove the edge's fit interval too.
+            eels_display_item.remove_graphic(eels_display_item.graphics[2])
+            self.assertEqual(1, len(eels_edge.fit_eels_intervals))
+            self.assertEqual(2, len(eels_display_item.graphics))
+            self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
 
-    # test_changing_interval_graphic_updates_eels_edge_interval
-    # test_extra_graphic_intervals_are_retained_when_adding_or_removing_edges
     # test_deleting_last_background_deletes_edge
     # test_deleting_signal_hides_edge
     # test_deleting_computation_hides_edge

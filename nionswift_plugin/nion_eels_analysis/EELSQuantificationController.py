@@ -372,6 +372,7 @@ class EELSEdgeDisplayView:
         self.__signal_interval_connection = None
         self.__interval_list_connection = None
         self.__signal_interval_about_to_close_connection = None
+        self.__computation_about_to_close_connection = None
 
     def close(self):
         if self.__signal_interval_connection:
@@ -383,6 +384,9 @@ class EELSEdgeDisplayView:
         if self.__signal_interval_about_to_close_connection:
             self.__signal_interval_about_to_close_connection.close()
             self.__signal_interval_about_to_close_connection = None
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
 
     def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
 
@@ -480,6 +484,20 @@ class EELSEdgeDisplayView:
 
         self.__interval_list_connection = IntervalListConnection(document_model, eels_display_item, eels_data_item, self.__eels_edge, fit_interval_graphics, computation)
 
+        # watch for computation being removed
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
+
+        def computation_removed():
+            self.computation = None
+            # computation will delete the two data items
+            self.background_data_item = None
+            self.signal_data_item = None
+            self.hide(document_model, eels_display_item)
+
+        self.__computation_about_to_close_connection = computation.about_to_be_removed_event.listen(computation_removed)
+
         # enable the legend display
         eels_display_item.set_display_property("legend_position", "top-right")
 
@@ -501,6 +519,9 @@ class EELSEdgeDisplayView:
         if self.__signal_interval_about_to_close_connection:
             self.__signal_interval_about_to_close_connection.close()
             self.__signal_interval_about_to_close_connection = None
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
         if self.computation:
             document_model.remove_computation(self.computation)
             self.computation = None

@@ -69,6 +69,16 @@ class ElectronShell:
         spins = (None, 1, 1, 3, 3, 5, 5, 7, 7, 9)
         return fractions.Fraction(spins[self.azimuthal_quantum_number], 2)
 
+    def _write_to_dict(self) -> typing.Dict:
+        d = dict()
+        if self.atomic_number is not None:
+            d["atomic_number"] = self.atomic_number
+        if self.shell_number is not None:
+            d["shell_number"] = self.shell_number
+        if self.subshell_index is not None:
+            d["subshell_index"] = self.subshell_index
+        return d
+
 
 class PeriodicTable(metaclass=Singleton):
     def __init__(self):

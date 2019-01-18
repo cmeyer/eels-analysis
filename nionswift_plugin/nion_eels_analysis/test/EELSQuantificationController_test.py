@@ -41,19 +41,23 @@ class TestEELSQuantificationController(unittest.TestCase):
         self.assertEqual(eels_edge_interval_int, graphic_interval_int)
 
     def test_adding_removing_edge_tracks_corresponding_edge_displays(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
-        self.assertEqual(0, len(qd.eels_edge_displays))
-        q.append_edge(EELSQuantificationController.EELSEdge())
-        self.assertEqual(1, len(qd.eels_edge_displays))
-        q.remove_edge(0)
-        self.assertEqual(0, len(qd.eels_edge_displays))
-
-    def test_adding_edge_from_signal_interval_configures_display_layers(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            self.assertEqual(0, len(qd.eels_edge_displays))
+            q.append_edge(EELSQuantificationController.EELSEdge())
+            self.assertEqual(1, len(qd.eels_edge_displays))
+            q.remove_edge(0)
+            self.assertEqual(0, len(qd.eels_edge_displays))
+
+    def test_adding_edge_from_signal_interval_configures_display_layers(self):
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -61,7 +65,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.assertEqual(3, len(eels_display_item.display_data_channels))
             self.assertEqual(3, len(eels_display_item.display_layers))
@@ -74,10 +79,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(1, len(document_model.computations))
 
     def test_removing_edge_removes_all_items(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -85,7 +89,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             qc.remove_eels_edge(eels_edge)
             self.assertEqual(1, len(eels_display_item.display_data_channels))
@@ -97,10 +102,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_signal_interval_graphic_and_eels_edge_signal_interval_are_connected(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -108,7 +112,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
             signal_interval_graphic.interval = (0.095, 0.105)
@@ -117,10 +122,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
 
     def test_fit_interval_graphic_and_eels_edge_fit_interval_are_connected(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -128,7 +132,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
             eels_display_item.graphics[1].interval = (0.04, 0.05)
@@ -137,10 +142,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.__compare_intervals(eels_data_item, eels_edge.signal_eels_interval, signal_interval_graphic)
 
     def test_adding_or_removing_fit_interval_to_eels_edge_adds_or_removes_fit_interval_graphic(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -148,7 +152,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.assertEqual(2, len(eels_edge.fit_eels_intervals))
             self.assertEqual(3, len(eels_display_item.graphics))
@@ -172,10 +177,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.__compare_intervals(eels_data_item, eels_edge.fit_eels_intervals[0], eels_display_item.graphics[1])
 
     def test_hiding_and_showing_eels_display_view(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -183,7 +187,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             # remove the 1st fit interval, then the signal
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.assertEqual(1, len(qd.eels_edge_displays))
@@ -191,10 +196,9 @@ class TestEELSQuantificationController(unittest.TestCase):
             qc.show_eels_edge(eels_edge)
 
     def test_deleting_signal_hides_edge(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -202,7 +206,8 @@ class TestEELSQuantificationController(unittest.TestCase):
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
             eels_display_item.add_graphic(signal_interval_graphic)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
             self.assertEqual(1, len(qd.eels_edge_displays))
             self.assertTrue(qd.eels_edge_displays[0].is_visible)
@@ -219,15 +224,15 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_deleting_signal_hides_edge_if_one_background_deleted_first(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
             signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             # remove the 2nd fit interval, then the signal
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
@@ -249,15 +254,15 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_deleting_computation_hides_edge(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
             signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             # remove the 2nd fit interval, then the signal
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
@@ -276,15 +281,15 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_deleting_background_data_item_hides_edge(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
             signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             # remove the 2nd fit interval, then the signal
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
@@ -303,15 +308,15 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(0, len(document_model.computations))
 
     def test_deleting_signal_data_item_hides_edge(self):
-        q = EELSQuantificationController.EELSQuantification()
-        qd = EELSQuantificationController.EELSQuantificationDisplay(q)
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
             signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
-            qc = EELSQuantificationController.EELSQuantificationController(document_model, eels_display_item, eels_data_item, qd)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
             # remove the 2nd fit interval, then the signal
             signal_interval_graphic = Graphics.IntervalGraphic()
             signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
@@ -329,4 +334,36 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(1, len(document_model.data_items))
             self.assertEqual(0, len(document_model.computations))
 
+    def test_adding_edge_configures_associated_data_structure(self):
+        document_model = DocumentModel.DocumentModel()
+        with contextlib.closing(document_model):
+            q = EELSQuantificationController.EELSQuantification(document_model)
+            self.assertEqual(1, len(document_model.data_structures))
+            eels_data_item = self.__create_spectrum()
+            document_model.append_data_item(eels_data_item)
+            eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            qd = EELSQuantificationController.EELSQuantificationDisplay(q, eels_display_item, eels_data_item)
+            qc = EELSQuantificationController.EELSQuantificationController(document_model, qd)
+            # remove the 2nd fit interval, then the signal
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = signal_eels_interval.to_fractional_interval(eels_data_item.data_shape[-1], eels_data_item.dimensional_calibrations[-1])
+            eels_display_item.add_graphic(signal_interval_graphic)
+            eels_edge = qc.add_eels_edge_from_interval_graphic(signal_interval_graphic)
+            # check general properties
+            self.assertEqual(2, len(document_model.data_structures))
+            # check the eels quantification data structure
+            self.assertEqual("nion.eels_quantification", document_model.data_structures[0].structure_type)
+            self.assertEqual(1, len(document_model.data_structures[0].eels_edges))
+            self.assertEqual(2, len(document_model.data_structures[0].eels_edges[0]["fit_eels_intervals"]))
+            self.assertIn("signal_eels_interval", document_model.data_structures[0].eels_edges[0])
+            # check the eels quantification display structure
+            self.assertEqual("nion.eels_quantification_display", document_model.data_structures[1].structure_type)
+            self.assertEqual(eels_data_item, document_model.data_structures[1].get_referenced_object("eels_data_item"))
+            self.assertEqual(eels_display_item, document_model.data_structures[1].get_referenced_object("eels_display_item"))
+            self.assertEqual(1, len(document_model.data_structures[1].eels_edge_displays))
+
+    # test_eels_quantification_disconnects_if_data_structure_deleted
+    # test_associated_data_structure_is_removed_when_display_item_removed
+    # test_orphan_associated_data_structures_are_removed_on_reload
     # test_deleting_last_background_deletes_edge

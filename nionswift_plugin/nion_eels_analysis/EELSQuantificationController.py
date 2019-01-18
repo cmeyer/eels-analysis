@@ -61,6 +61,14 @@ class EELSInterval:
         end_pixel = calibration.convert_from_calibrated_value(self.end_ev)
         return start_pixel / data_len, end_pixel / data_len
 
+    def _write_to_dict(self) -> typing.Dict:
+        d = dict()
+        if self.__start_ev is not None:
+            d["start_ev"] = self.start_ev
+        if self.__end_ev is not None:
+            d["end_ev"] = self.end_ev
+        return d
+
 
 class EELSInterfaceToFractionalIntervalConverter:
     def __init__(self, eels_data_len: int, eels_calibration: Calibration.Calibration):
@@ -122,17 +130,43 @@ class EELSEdge(Observable.Observable):
     def fit_eels_intervals(self) -> typing.List[EELSInterval]:
         return self.__fit_eels_intervals
 
+    def _write_to_dict(self) -> typing.Dict:
+        d = dict()
+        if self.__signal_eels_interval:
+            d["signal_eels_interval"] = self.__signal_eels_interval._write_to_dict()
+        if len(self.__fit_eels_intervals) > 0:
+            d["fit_eels_intervals"] = [fit_eels_interval._write_to_dict() for fit_eels_interval in self.__fit_eels_intervals]
+        if self.__signal_eels_interval:
+            d["signal_eels_interval"] = self.__signal_eels_interval._write_to_dict()
+        if self.__electron_shell:
+            d["electron_shell"] = self.__electron_shell._write_to_dict()
+        return d
+
 
 class EELSQuantification(Observable.Observable):
     """Quantification settings include a list of edges."""
 
-    def __init__(self, *, eels_edges: typing.List[EELSEdge]=None):
+    def __init__(self, document_model: DocumentModel.DocumentModel, *, eels_edges: typing.List[EELSEdge]=None):
         super().__init__()
+        self.__data_structure = None
+        self.__document_model = document_model
         self.__eels_edges = eels_edges or list()
+        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification")
+        self.__document_model.append_data_structure(data_structure)
+        self.__data_structure = data_structure
+
+    @property
+    def document_model(self) -> DocumentModel.DocumentModel:
+        return self.__document_model
+
+    @property
+    def data_structure(self) -> DocumentModel.DataStructure:
+        return self.__data_structure
 
     def insert_edge(self, index: int, eels_edge: EELSEdge) -> None:
         self.__eels_edges.insert(index, eels_edge)
         self.notify_insert_item("eels_edges", eels_edge, index)
+        self.__write()
 
     def append_edge(self, eels_edge: EELSEdge) -> None:
         self.insert_edge(len(self.__eels_edges), eels_edge)
@@ -141,10 +175,14 @@ class EELSQuantification(Observable.Observable):
         eels_edge = self.__eels_edges[index]
         self.__eels_edges.remove(eels_edge)
         self.notify_remove_item("eels_edges", eels_edge, index)
+        self.__write()
 
     @property
     def eels_edges(self) -> typing.List[EELSEdge]:
         return self.__eels_edges
+
+    def __write(self) -> None:
+        self.__data_structure.set_property_value("eels_edges", [eels_edge._write_to_dict() for eels_edge in self.eels_edges])
 
 
 class EELSEdgeDisplay(Observable.Observable):
@@ -167,13 +205,19 @@ class EELSEdgeDisplay(Observable.Observable):
     def is_visible(self, value: bool) -> None:
         self.__is_visible = value
 
+    def _write_to_dict(self) -> typing.Dict:
+        return {"is_visible": self.is_visible}
+
 
 class EELSQuantificationDisplay(Observable.Observable):
     """Display settings for an EELS quantification."""
 
-    def __init__(self, eels_quantification: EELSQuantification):
+    def __init__(self, eels_quantification: EELSQuantification, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem):
         super().__init__()
         self.__eels_quantification = eels_quantification
+        self.__document_model = eels_quantification.document_model
+        self.eels_display_item = eels_display_item
+        self.eels_data_item = eels_data_item
         self.__eels_edge_displays = list()
 
         for eels_edge in self.__eels_quantification.eels_edges:
@@ -184,28 +228,27 @@ class EELSQuantificationDisplay(Observable.Observable):
                 eels_edge_display = EELSEdgeDisplay(value)
                 self.__eels_edge_displays.insert(before_index, eels_edge_display)
                 self.notify_insert_item("eels_edge_displays", eels_edge_display, before_index)
+                self.__write()
 
         def eels_edge_removed(key, value, index):
             if key == "eels_edges":
                 eels_edge_display = self.__eels_edge_displays[index]
                 self.__eels_edge_displays.remove(eels_edge_display)
                 self.notify_remove_item("eels_edge_displays", eels_edge_display, index)
+                self.__write()
 
         self.__eels_quantification_item_inserted_event_listener = self.__eels_quantification.item_inserted_event.listen(eels_edge_inserted)
         self.__eels_quantification_item_removed_event_listener = self.__eels_quantification.item_removed_event.listen(eels_edge_removed)
+
+        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification_display", source=self.__eels_quantification.data_structure)
+        self.__document_model.append_data_structure(data_structure)
+        self.__data_structure = data_structure
 
     def close(self):
         self.__eels_quantification_item_inserted_event_listener.close()
         self.__eels_quantification_item_inserted_event_listener = None
         self.__eels_quantification_item_removed_event_listener.close()
         self.__eels_quantification_item_removed_event_listener = None
-
-    def insert_eels_edge_display(self, before_index: int, eels_edge_display: EELSEdgeDisplay) -> None:
-        self.__eels_edge_displays.insert(before_index, eels_edge_display)
-        self.notify_insert_item("eels_edge_displays", eels_edge_display, before_index)
-
-    def append_eels_edge_display(self, eels_edge_display: EELSEdgeDisplay) -> None:
-        self.insert_eels_edge_display(len(self.__eels_edge_displays), eels_edge_display)
 
     @property
     def eels_quantification(self) -> EELSQuantification:
@@ -214,6 +257,11 @@ class EELSQuantificationDisplay(Observable.Observable):
     @property
     def eels_edge_displays(self) -> typing.List[EELSEdgeDisplay]:
         return self.__eels_edge_displays
+
+    def __write(self) -> None:
+        self.__data_structure.set_property_value("eels_edge_displays", [eels_edge_display._write_to_dict() for eels_edge_display in self.__eels_edge_displays])
+        self.__data_structure.set_referenced_object("eels_display_item", self.eels_display_item)
+        self.__data_structure.set_referenced_object("eels_data_item", self.eels_data_item)
 
 
 class IntervalConnection:
@@ -550,10 +598,10 @@ class EELSQuantificationController:
         - enabling/disabling line plot layers
     """
 
-    def __init__(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem, eels_quantification_display: EELSQuantificationDisplay):
+    def __init__(self, document_model: DocumentModel.DocumentModel, eels_quantification_display: EELSQuantificationDisplay):
         self.__document_model = document_model
-        self.__eels_display_item = eels_display_item
-        self.__eels_data_item = eels_data_item
+        self.__eels_display_item = eels_quantification_display.eels_display_item
+        self.__eels_data_item = eels_quantification_display.eels_data_item
         self.__eels_quantification_display = eels_quantification_display
         self.__eels_quantification = eels_quantification_display.eels_quantification
         self.__eels_edge_views_map = dict()
@@ -571,7 +619,7 @@ class EELSQuantificationController:
                     eels_edge_display_view.signal_interval_graphic = self.__pending_signal_interval_graphic
                     self.__pending_signal_interval_graphic = None
                     self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
-                eels_edge_display_view.show(document_model, eels_display_item, eels_data_item)
+                eels_edge_display_view.show(document_model, self.__eels_display_item, self.__eels_data_item)
 
         def eels_edge_display_removed(key, value, index):
             if key == "eels_edge_displays":
@@ -579,7 +627,7 @@ class EELSQuantificationController:
                 eels_edge = eels_edge_display.eels_edge
                 eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
                 if eels_edge_display_view:
-                    eels_edge_display_view.hide(document_model, eels_display_item)
+                    eels_edge_display_view.hide(document_model, self.__eels_display_item)
 
         self.__eels_quantification_display_item_inserted_event_listener = self.__eels_quantification_display.item_inserted_event.listen(eels_edge_display_inserted)
         self.__eels_quantification_display_item_removed_event_listener = self.__eels_quantification_display.item_removed_event.listen(eels_edge_display_removed)

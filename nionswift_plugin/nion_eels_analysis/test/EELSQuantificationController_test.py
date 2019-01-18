@@ -14,6 +14,7 @@ from nion.data import DataAndMetadata
 from nion.swift.model import DataItem
 from nion.swift.model import DocumentModel
 from nion.swift.model import Graphics
+from nion.swift.model import MemoryStorageSystem
 
 
 class TestEELSQuantificationController(unittest.TestCase):
@@ -43,7 +44,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_adding_removing_edge_tracks_corresponding_edge_displays(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -57,7 +59,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_adding_edge_from_signal_interval_configures_display_layers(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -81,7 +84,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_removing_edge_removes_all_items(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -104,7 +108,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_signal_interval_graphic_and_eels_edge_signal_interval_are_connected(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -124,7 +129,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_fit_interval_graphic_and_eels_edge_fit_interval_are_connected(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -144,7 +150,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_adding_or_removing_fit_interval_to_eels_edge_adds_or_removes_fit_interval_graphic(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -179,7 +186,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_hiding_and_showing_eels_display_view(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -198,7 +206,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_deleting_signal_hides_edge(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -226,7 +235,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_deleting_signal_hides_edge_if_one_background_deleted_first(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -256,7 +266,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_deleting_computation_hides_edge(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -283,7 +294,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_deleting_background_data_item_hides_edge(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -310,7 +322,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_deleting_signal_data_item_hides_edge(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
             eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
@@ -337,7 +350,8 @@ class TestEELSQuantificationController(unittest.TestCase):
     def test_adding_edge_configures_associated_data_structure(self):
         document_model = DocumentModel.DocumentModel()
         with contextlib.closing(document_model):
-            q = EELSQuantificationController.EELSQuantification(document_model)
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
             self.assertEqual(1, len(document_model.data_structures))
             eels_data_item = self.__create_spectrum()
             document_model.append_data_item(eels_data_item)
@@ -362,6 +376,29 @@ class TestEELSQuantificationController(unittest.TestCase):
             self.assertEqual(eels_data_item, document_model.data_structures[1].get_referenced_object("eels_data_item"))
             self.assertEqual(eels_display_item, document_model.data_structures[1].get_referenced_object("eels_display_item"))
             self.assertEqual(1, len(document_model.data_structures[1].eels_edge_displays))
+
+    def test_reloading_quantification_with_edges(self):
+        memory_persistent_storage_system = MemoryStorageSystem.MemoryStorageSystem()
+        document_model = DocumentModel.DocumentModel(storage_system=memory_persistent_storage_system)
+        with contextlib.closing(document_model):
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            q = qm.create_eels_quantification()
+            signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+            fit_eels_interval = EELSQuantificationController.EELSInterval(start_ev=160, end_ev=180)
+            eels_edge = EELSQuantificationController.EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_eels_interval])
+            q.append_edge(eels_edge)
+        document_model = DocumentModel.DocumentModel(storage_system=memory_persistent_storage_system)
+        with contextlib.closing(document_model):
+            qm = EELSQuantificationController.EELSQuantificationManager(document_model)
+            self.assertEqual(1, len(qm.eels_quantifications))
+            q = qm.eels_quantifications[0]
+            self.assertEqual(1, len(q.eels_edges))
+            eels_edge = q.eels_edges[0]
+            self.assertEqual(188.0, eels_edge.signal_eels_interval.start_ev)
+            self.assertEqual(208.0, eels_edge.signal_eels_interval.end_ev)
+            self.assertEqual(1, len(eels_edge.fit_eels_intervals))
+            self.assertEqual(160.0, eels_edge.fit_eels_intervals[0].start_ev)
+            self.assertEqual(180.0, eels_edge.fit_eels_intervals[0].end_ev)
 
     # test_eels_quantification_disconnects_if_data_structure_deleted
     # test_associated_data_structure_is_removed_when_display_item_removed

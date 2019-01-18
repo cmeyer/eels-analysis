@@ -69,6 +69,14 @@ class ElectronShell:
         spins = (None, 1, 1, 3, 3, 5, 5, 7, 7, 9)
         return fractions.Fraction(spins[self.azimuthal_quantum_number], 2)
 
+    @staticmethod
+    def from_d(d: typing.Dict) -> "ElectronShell":
+        d = d or dict()
+        atomic_number = d.get("atomic_number")
+        shell_number = d.get("shell_number")
+        subshell_index = d.get("subshell_index")
+        return ElectronShell(atomic_number, shell_number, subshell_index)
+
     def _write_to_dict(self) -> typing.Dict:
         d = dict()
         if self.atomic_number is not None:

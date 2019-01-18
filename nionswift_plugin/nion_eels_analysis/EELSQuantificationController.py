@@ -13,6 +13,7 @@ from nion.swift.model import Graphics
 from nion.swift.model import Symbolic
 from nion.utils import Binding
 from nion.utils import Event
+from nion.utils import ListModel
 from nion.utils import Observable
 
 
@@ -32,6 +33,12 @@ class EELSInterval:
         assert data_len > 0
         start_pixel, end_pixel = interval[0] * data_len, interval[1] * data_len
         return EELSInterval(start_ev=calibration.convert_to_calibrated_value(start_pixel), end_ev=calibration.convert_to_calibrated_value(end_pixel))
+
+    @staticmethod
+    def from_d(d: typing.Dict) -> "EELSInterval":
+        start_ev = (d or dict()).get("start_ev", None)
+        end_ev = (d or dict()).get("end_ev", None)
+        return EELSInterval(start_ev, end_ev)
 
     @property
     def start_ev(self) -> typing.Optional[float]:
@@ -85,12 +92,16 @@ class EELSInterfaceToFractionalIntervalConverter:
 class EELSEdge(Observable.Observable):
     """An edge is a signal interval, a list of fit intervals, and other edge identifying information."""
 
-    def __init__(self, *, signal_eels_interval: EELSInterval=None, fit_eels_intervals: typing.List[EELSInterval]=None, electron_shell: PeriodicTable.ElectronShell=None):
+    def __init__(self, *, signal_eels_interval: EELSInterval=None, fit_eels_intervals: typing.List[EELSInterval]=None, electron_shell: PeriodicTable.ElectronShell=None, d: typing.Dict=None):
         super().__init__()
         self.__signal_eels_interval = signal_eels_interval
         self.__fit_eels_intervals = fit_eels_intervals or list()
         self.__electron_shell = electron_shell
         self.fit_eels_interval_changed = Event.Event()
+        if d is not None:
+            self.__signal_eels_interval = EELSInterval.from_d(d.get("signal_eels_interval"))
+            self.__fit_eels_intervals = [EELSInterval.from_d(fit_interval_d) for fit_interval_d in d.get("fit_eels_intervals", list())]
+            self.__electron_shell = PeriodicTable.ElectronShell.from_d(d.get("electron_shell"))
 
     @property
     def signal_eels_interval(self) -> typing.Optional[EELSInterval]:
@@ -103,7 +114,7 @@ class EELSEdge(Observable.Observable):
 
     @property
     def electron_shell(self) -> typing.Optional[PeriodicTable.ElectronShell]:
-        return self.__signal_eels_interval
+        return self.__electron_shell
 
     @electron_shell.setter
     def electron_shell(self, value: typing.Optional[PeriodicTable.ElectronShell]) -> None:
@@ -146,14 +157,12 @@ class EELSEdge(Observable.Observable):
 class EELSQuantification(Observable.Observable):
     """Quantification settings include a list of edges."""
 
-    def __init__(self, document_model: DocumentModel.DocumentModel, *, eels_edges: typing.List[EELSEdge]=None):
+    def __init__(self, document_model: DocumentModel.DocumentModel, data_structure: DocumentModel.DataStructure):
         super().__init__()
-        self.__data_structure = None
         self.__document_model = document_model
-        self.__eels_edges = eels_edges or list()
-        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification")
-        self.__document_model.append_data_structure(data_structure)
+        self.__eels_edges = list()
         self.__data_structure = data_structure
+        self.__read()
 
     @property
     def document_model(self) -> DocumentModel.DocumentModel:
@@ -183,6 +192,10 @@ class EELSQuantification(Observable.Observable):
 
     def __write(self) -> None:
         self.__data_structure.set_property_value("eels_edges", [eels_edge._write_to_dict() for eels_edge in self.eels_edges])
+
+    def __read(self) -> None:
+        for eels_edge_d in self.__data_structure.get_property_value("eels_edges", list()):
+            self.__eels_edges.append(EELSEdge(d=eels_edge_d))
 
 
 class EELSEdgeDisplay(Observable.Observable):
@@ -262,6 +275,58 @@ class EELSQuantificationDisplay(Observable.Observable):
         self.__data_structure.set_property_value("eels_edge_displays", [eels_edge_display._write_to_dict() for eels_edge_display in self.__eels_edge_displays])
         self.__data_structure.set_referenced_object("eels_display_item", self.eels_display_item)
         self.__data_structure.set_referenced_object("eels_data_item", self.eels_data_item)
+
+
+class Singleton(type):
+    def __init__(cls, name, bases, dict):
+        super().__init__(name, bases, dict)
+        cls.instance = None
+
+    def __call__(cls, *args, **kw):
+        if cls.instance is None:
+            cls.instance = super().__call__(*args, **kw)
+        return cls.instance
+
+
+class EELSQuantificationManager:
+
+    def __init__(self, document_model: DocumentModel.DocumentModel):
+        self.__document_model = document_model
+        self.__eels_quantifications = list()
+        self.__list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_data_structures")
+        self.__list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification")
+
+        def item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
+            self.__eels_quantifications.insert(before_index, EELSQuantification(self.__document_model, value))
+
+        def item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
+            self.__eels_quantifications.pop(index)
+
+        self.__item_inserted_event_listener = self.__list_model.item_inserted_event.listen(item_inserted)
+        self.__item_removed_event_listener = self.__list_model.item_removed_event.listen(item_removed)
+
+        for index, eels_quantification in enumerate(self.__list_model.items):
+            item_inserted("eels_quantification_data_structures", eels_quantification, index)
+
+    def close(self) -> None:
+        self.__item_inserted_event_listener.close()
+        self.__item_inserted_event_listener = None
+        self.__item_removed_event_listener.close()
+        self.__item_removed_event_listener = None
+        self.__list_model.close()
+        self.__list_model = None
+
+    @property
+    def eels_quantifications(self) -> typing.List[EELSQuantification]:
+        return self.__eels_quantifications
+
+    def create_eels_quantification(self) -> EELSQuantification:
+        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification")
+        self.__document_model.append_data_structure(data_structure)
+        for eels_quantification in self.__eels_quantifications:
+            if eels_quantification.data_structure == data_structure:
+                return eels_quantification
+        return EELSQuantification(self.__document_model, data_structure)
 
 
 class IntervalConnection:

@@ -7,6 +7,7 @@ import typing
 from nion.data import Calibration
 from nion.eels_analysis import PeriodicTable
 from nion.swift.model import DataItem
+from nion.swift.model import DataStructure
 from nion.swift.model import DisplayItem
 from nion.swift.model import DocumentModel
 from nion.swift.model import Graphics
@@ -157,7 +158,7 @@ class EELSEdge(Observable.Observable):
 class EELSQuantification(Observable.Observable):
     """Quantification settings include a list of edges."""
 
-    def __init__(self, document_model: DocumentModel.DocumentModel, data_structure: DocumentModel.DataStructure):
+    def __init__(self, document_model: DocumentModel.DocumentModel, data_structure: DataStructure.DataStructure):
         super().__init__()
         self.__document_model = document_model
         self.__eels_edges = list()
@@ -169,7 +170,7 @@ class EELSQuantification(Observable.Observable):
         return self.__document_model
 
     @property
-    def data_structure(self) -> DocumentModel.DataStructure:
+    def data_structure(self) -> DataStructure.DataStructure:
         return self.__data_structure
 
     def insert_edge(self, index: int, eels_edge: EELSEdge) -> None:
@@ -232,7 +233,7 @@ class EELSEdgeDisplay(Observable.Observable):
 class EELSQuantificationDisplay(Observable.Observable):
     """Display settings for an EELS quantification."""
 
-    def __init__(self, eels_quantification: EELSQuantification, data_structure: DocumentModel.DataStructure):
+    def __init__(self, eels_quantification: EELSQuantification, data_structure: DataStructure.DataStructure):
         super().__init__()
 
         self.__data_structure = data_structure
@@ -293,7 +294,7 @@ class EELSQuantificationDisplay(Observable.Observable):
         return self.__document_model
 
     @property
-    def data_structure(self) -> DocumentModel.DataStructure:
+    def data_structure(self) -> DataStructure.DataStructure:
         return self.__data_structure
 
     @property
@@ -331,6 +332,21 @@ class Singleton(type):
 
 
 class EELSQuantificationManager:
+    instances = dict()
+    listeners = dict()
+
+    @classmethod
+    def get_instance(cls, document_model: DocumentModel.DocumentModel) -> "EELSQuantificationManager":
+        if not document_model in cls.instances:
+            cls.instances[document_model] = EELSQuantificationManager(document_model)
+
+            def document_about_to_close():
+                cls.instances.pop(document_model)
+                cls.listeners.pop(document_model)
+
+            cls.listeners[document_model] = document_model.about_to_close_event.listen(document_about_to_close)
+
+        return cls.instances[document_model]
 
     def __init__(self, document_model: DocumentModel.DocumentModel):
         self.__document_model = document_model
@@ -339,10 +355,10 @@ class EELSQuantificationManager:
         self.__eels_quantification_list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_data_structures")
         self.__eels_quantification_list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification")
 
-        def eels_quantification_list_item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
+        def eels_quantification_list_item_inserted(key: str, value: DataStructure.DataStructure, before_index: int) -> None:
             self.__eels_quantifications.insert(before_index, EELSQuantification(self.__document_model, value))
 
-        def eels_quantification_list_item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
+        def eels_quantification_list_item_removed(key: str, value: DataStructure.DataStructure, index: int) -> None:
             self.__eels_quantifications.pop(index)
 
         self.__eels_quantification_list_item_inserted_event_listener = self.__eels_quantification_list_model.item_inserted_event.listen(eels_quantification_list_item_inserted)
@@ -355,7 +371,7 @@ class EELSQuantificationManager:
         self.__eels_quantification_display_list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_display_data_structures")
         self.__eels_quantification_display_list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification_display")
 
-        def eels_quantification_display_list_item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
+        def eels_quantification_display_list_item_inserted(key: str, value: DataStructure.DataStructure, before_index: int) -> None:
             data_structure = value
             eels_quantification = None
             for eels_quantification_ in self.__eels_quantifications:
@@ -364,7 +380,7 @@ class EELSQuantificationManager:
                     break
             self.__eels_quantification_displays.insert(before_index, EELSQuantificationDisplay(eels_quantification, data_structure))
 
-        def eels_quantification_display_list_item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
+        def eels_quantification_display_list_item_removed(key: str, value: DataStructure.DataStructure, index: int) -> None:
             self.__eels_quantification_displays.pop(index)
 
         self.__eels_quantification_display_list_item_inserted_event_listener = self.__eels_quantification_display_list_model.item_inserted_event.listen(eels_quantification_display_list_item_inserted)
@@ -392,7 +408,7 @@ class EELSQuantificationManager:
         return self.__eels_quantifications
 
     def create_eels_quantification(self) -> EELSQuantification:
-        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification")
+        data_structure = DataStructure.DataStructure(structure_type="nion.eels_quantification")
         self.__document_model.append_data_structure(data_structure)
         for eels_quantification in self.__eels_quantifications:
             if eels_quantification.data_structure == data_structure:
@@ -400,7 +416,7 @@ class EELSQuantificationManager:
         return EELSQuantification(self.__document_model, data_structure)
 
     def create_eels_quantification_display(self, eels_quantification: EELSQuantification, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> EELSQuantificationDisplay:
-        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification_display", source=eels_quantification.data_structure)
+        data_structure = DataStructure.DataStructure(structure_type="nion.eels_quantification_display", source=eels_quantification.data_structure)
         data_structure.set_referenced_object("eels_display_item", eels_display_item)
         data_structure.set_referenced_object("eels_data_item", eels_data_item)
         self.__document_model.append_data_structure(data_structure)

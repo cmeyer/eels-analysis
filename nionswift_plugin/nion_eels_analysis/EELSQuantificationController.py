@@ -201,9 +201,10 @@ class EELSQuantification(Observable.Observable):
 class EELSEdgeDisplay(Observable.Observable):
     """Display settings for an EELS edge."""
 
-    def __init__(self, eels_edge: EELSEdge, *, is_visible: bool = True):
+    def __init__(self, eels_edge: EELSEdge, update_fn, *, is_visible: bool = True):
         super().__init__()
         self.__eels_edge = eels_edge
+        self.__update_fn = update_fn
         self.__is_visible = is_visible
 
     @property
@@ -217,33 +218,41 @@ class EELSEdgeDisplay(Observable.Observable):
     @is_visible.setter
     def is_visible(self, value: bool) -> None:
         self.__is_visible = value
+        self.__update_fn()
 
     def _write_to_dict(self) -> typing.Dict:
         return {"is_visible": self.is_visible}
+
+    @staticmethod
+    def from_d(eels_edge: EELSEdge, update_fn, d: typing.Dict) -> "EELSEdgeDisplay":
+        is_visible = d.get("is_visible", False)
+        return EELSEdgeDisplay(eels_edge, update_fn, is_visible=is_visible)
 
 
 class EELSQuantificationDisplay(Observable.Observable):
     """Display settings for an EELS quantification."""
 
-    def __init__(self, eels_quantification: EELSQuantification, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem):
+    def __init__(self, eels_quantification: EELSQuantification, data_structure: DocumentModel.DataStructure):
         super().__init__()
+
+        self.__data_structure = data_structure
         self.__eels_quantification = eels_quantification
         self.__document_model = eels_quantification.document_model
-        self.eels_display_item = eels_display_item
-        self.eels_data_item = eels_data_item
+        self.eels_display_item = None
+        self.eels_data_item = None
         self.__eels_edge_displays = list()
 
-        for eels_edge in self.__eels_quantification.eels_edges:
-            self.__eels_edge_displays.append(EELSEdgeDisplay(eels_edge))
+        self.__read()
 
-        def eels_edge_inserted(key, value, before_index):
+        def eels_edge_inserted(key: str, value, before_index: int) -> None:
             if key == "eels_edges":
-                eels_edge_display = EELSEdgeDisplay(value)
+                eels_edge = value
+                eels_edge_display = EELSEdgeDisplay(eels_edge, self.__write)
                 self.__eels_edge_displays.insert(before_index, eels_edge_display)
                 self.notify_insert_item("eels_edge_displays", eels_edge_display, before_index)
                 self.__write()
 
-        def eels_edge_removed(key, value, index):
+        def eels_edge_removed(key: str, value, index: int) -> None:
             if key == "eels_edges":
                 eels_edge_display = self.__eels_edge_displays[index]
                 self.__eels_edge_displays.remove(eels_edge_display)
@@ -253,15 +262,39 @@ class EELSQuantificationDisplay(Observable.Observable):
         self.__eels_quantification_item_inserted_event_listener = self.__eels_quantification.item_inserted_event.listen(eels_edge_inserted)
         self.__eels_quantification_item_removed_event_listener = self.__eels_quantification.item_removed_event.listen(eels_edge_removed)
 
-        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification_display", source=self.__eels_quantification.data_structure)
-        self.__document_model.append_data_structure(data_structure)
-        self.__data_structure = data_structure
+        def document_model_item_inserted(key: str, value, before_index: int) -> None:
+            if not self.eels_data_item and key == "data_items":
+                self.eels_data_item = self.__data_structure.get_referenced_object("eels_data_item")
+            if not self.eels_display_item and key == "display_items":
+                self.eels_display_item = self.__data_structure.get_referenced_object("eels_display_item")
+
+        def document_model_item_removed(key: str, value, index: int) -> None:
+            if key == "data_items" and value == self.eels_data_item:
+                self.eels_data_item = None
+            if key == "display_items" and value == self.eels_display_item:
+                self.eels_display_item = None
+
+        self.__item_inserted_event_listener = self.__document_model.item_inserted_event.listen(document_model_item_inserted)
+        self.__item_removed_event_listener = self.__document_model.item_removed_event.listen(document_model_item_removed)
+
 
     def close(self):
         self.__eels_quantification_item_inserted_event_listener.close()
         self.__eels_quantification_item_inserted_event_listener = None
         self.__eels_quantification_item_removed_event_listener.close()
         self.__eels_quantification_item_removed_event_listener = None
+        self.__item_inserted_event_listener.close()
+        self.__item_inserted_event_listener = None
+        self.__item_removed_event_listener.close()
+        self.__item_removed_event_listener = None
+
+    @property
+    def document_model(self) -> DocumentModel.DocumentModel:
+        return self.__document_model
+
+    @property
+    def data_structure(self) -> DocumentModel.DataStructure:
+        return self.__data_structure
 
     @property
     def eels_quantification(self) -> EELSQuantification:
@@ -275,6 +308,15 @@ class EELSQuantificationDisplay(Observable.Observable):
         self.__data_structure.set_property_value("eels_edge_displays", [eels_edge_display._write_to_dict() for eels_edge_display in self.__eels_edge_displays])
         self.__data_structure.set_referenced_object("eels_display_item", self.eels_display_item)
         self.__data_structure.set_referenced_object("eels_data_item", self.eels_data_item)
+
+    def __read(self) -> None:
+        eels_edge_display_d_list = self.__data_structure.get_property_value("eels_edge_displays", list())
+        while len(eels_edge_display_d_list) < len(self.__eels_quantification.eels_edges):
+            eels_edge_display_d_list.append({"is_visible": False})
+        for eels_edge, eels_edge_display_d in zip(self.__eels_quantification.eels_edges, eels_edge_display_d_list):
+            self.__eels_edge_displays.append(EELSEdgeDisplay.from_d(eels_edge, self.__write, eels_edge_display_d))
+        self.eels_data_item = self.__data_structure.get_referenced_object("eels_data_item")
+        self.eels_display_item = self.__data_structure.get_referenced_object("eels_display_item")
 
 
 class Singleton(type):
@@ -292,29 +334,58 @@ class EELSQuantificationManager:
 
     def __init__(self, document_model: DocumentModel.DocumentModel):
         self.__document_model = document_model
-        self.__eels_quantifications = list()
-        self.__list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_data_structures")
-        self.__list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification")
 
-        def item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
+        self.__eels_quantifications = list()
+        self.__eels_quantification_list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_data_structures")
+        self.__eels_quantification_list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification")
+
+        def eels_quantification_list_item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
             self.__eels_quantifications.insert(before_index, EELSQuantification(self.__document_model, value))
 
-        def item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
+        def eels_quantification_list_item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
             self.__eels_quantifications.pop(index)
 
-        self.__item_inserted_event_listener = self.__list_model.item_inserted_event.listen(item_inserted)
-        self.__item_removed_event_listener = self.__list_model.item_removed_event.listen(item_removed)
+        self.__eels_quantification_list_item_inserted_event_listener = self.__eels_quantification_list_model.item_inserted_event.listen(eels_quantification_list_item_inserted)
+        self.__eels_quantification_list_item_removed_event_listener = self.__eels_quantification_list_model.item_removed_event.listen(eels_quantification_list_item_removed)
 
-        for index, eels_quantification in enumerate(self.__list_model.items):
-            item_inserted("eels_quantification_data_structures", eels_quantification, index)
+        for index, eels_quantification in enumerate(self.__eels_quantification_list_model.items):
+            eels_quantification_list_item_inserted("eels_quantification_data_structures", eels_quantification, index)
+
+        self.__eels_quantification_displays = list()
+        self.__eels_quantification_display_list_model = ListModel.FilteredListModel(container=self.__document_model, master_items_key="data_structures", items_key="eels_quantification_display_data_structures")
+        self.__eels_quantification_display_list_model.filter = ListModel.EqFilter("structure_type", "nion.eels_quantification_display")
+
+        def eels_quantification_display_list_item_inserted(key: str, value: DocumentModel.DataStructure, before_index: int) -> None:
+            data_structure = value
+            eels_quantification = None
+            for eels_quantification_ in self.__eels_quantifications:
+                if eels_quantification_.data_structure == value.source:
+                    eels_quantification = eels_quantification_
+                    break
+            self.__eels_quantification_displays.insert(before_index, EELSQuantificationDisplay(eels_quantification, data_structure))
+
+        def eels_quantification_display_list_item_removed(key: str, value: DocumentModel.DataStructure, index: int) -> None:
+            self.__eels_quantification_displays.pop(index)
+
+        self.__eels_quantification_display_list_item_inserted_event_listener = self.__eels_quantification_display_list_model.item_inserted_event.listen(eels_quantification_display_list_item_inserted)
+        self.__eels_quantification_display_list_item_removed_event_listener = self.__eels_quantification_display_list_model.item_removed_event.listen(eels_quantification_display_list_item_removed)
+
+        for index, eels_quantification_display in enumerate(self.__eels_quantification_display_list_model.items):
+            eels_quantification_display_list_item_inserted("eels_quantification_display_data_structures", eels_quantification_display, index)
 
     def close(self) -> None:
-        self.__item_inserted_event_listener.close()
-        self.__item_inserted_event_listener = None
-        self.__item_removed_event_listener.close()
-        self.__item_removed_event_listener = None
-        self.__list_model.close()
-        self.__list_model = None
+        self.__eels_quantification_list_item_inserted_event_listener.close()
+        self.__eels_quantification_list_item_inserted_event_listener = None
+        self.__eels_quantification_list_item_removed_event_listener.close()
+        self.__eels_quantification_list_item_removed_event_listener = None
+        self.__eels_quantification_list_model.close()
+        self.__eels_quantification_list_model = None
+        self.__eels_quantification_display_list_item_inserted_event_listener.close()
+        self.__eels_quantification_display_list_item_inserted_event_listener = None
+        self.__eels_quantification_display_list_item_removed_event_listener.close()
+        self.__eels_quantification_display_list_item_removed_event_listener = None
+        self.__eels_quantification_display_list_model.close()
+        self.__eels_quantification_display_list_model = None
 
     @property
     def eels_quantifications(self) -> typing.List[EELSQuantification]:
@@ -327,6 +398,19 @@ class EELSQuantificationManager:
             if eels_quantification.data_structure == data_structure:
                 return eels_quantification
         return EELSQuantification(self.__document_model, data_structure)
+
+    def create_eels_quantification_display(self, eels_quantification: EELSQuantification, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> EELSQuantificationDisplay:
+        data_structure = DocumentModel.DataStructure(structure_type="nion.eels_quantification_display", source=eels_quantification.data_structure)
+        data_structure.set_referenced_object("eels_display_item", eels_display_item)
+        data_structure.set_referenced_object("eels_data_item", eels_data_item)
+        self.__document_model.append_data_structure(data_structure)
+        for eels_quantification_display in self.get_eels_quantification_displays(eels_quantification):
+            if eels_quantification_display.data_structure == data_structure:
+                return eels_quantification_display
+        return EELSQuantificationDisplay(eels_quantification, data_structure)
+
+    def get_eels_quantification_displays(self, eels_quantification: EELSQuantification) -> typing.List[EELSQuantificationDisplay]:
+        return [eels_quantification_display for eels_quantification_display in self.__eels_quantification_displays if eels_quantification_display.eels_quantification == eels_quantification]
 
 
 class IntervalConnection:
@@ -696,6 +780,9 @@ class EELSQuantificationController:
 
         self.__eels_quantification_display_item_inserted_event_listener = self.__eels_quantification_display.item_inserted_event.listen(eels_edge_display_inserted)
         self.__eels_quantification_display_item_removed_event_listener = self.__eels_quantification_display.item_removed_event.listen(eels_edge_display_removed)
+
+        for index, eels_edge_display in enumerate(self.__eels_quantification_display.eels_edge_displays):
+            eels_edge_display_inserted("eels_edge_displays", eels_edge_display, index)
 
     def close(self):
         self.__eels_quantification_display_item_inserted_event_listener.close()

@@ -1,8 +1,10 @@
 """EELS Quantification objects.
 """
+import copy
 import functools
 import gettext
 import typing
+import uuid
 
 from nion.data import Calibration
 from nion.eels_analysis import PeriodicTable
@@ -95,14 +97,20 @@ class EELSEdge(Observable.Observable):
 
     def __init__(self, *, signal_eels_interval: EELSInterval=None, fit_eels_intervals: typing.List[EELSInterval]=None, electron_shell: PeriodicTable.ElectronShell=None, d: typing.Dict=None):
         super().__init__()
+        self.__uuid = uuid.uuid4()
         self.__signal_eels_interval = signal_eels_interval
         self.__fit_eels_intervals = fit_eels_intervals or list()
         self.__electron_shell = electron_shell
         self.fit_eels_interval_changed = Event.Event()
         if d is not None:
+            self.__uuid = uuid.UUID(d.get("uuid"))
             self.__signal_eels_interval = EELSInterval.from_d(d.get("signal_eels_interval"))
             self.__fit_eels_intervals = [EELSInterval.from_d(fit_interval_d) for fit_interval_d in d.get("fit_eels_intervals", list())]
             self.__electron_shell = PeriodicTable.ElectronShell.from_d(d.get("electron_shell"))
+
+    @property
+    def uuid(self) -> uuid.UUID:
+        return self.__uuid
 
     @property
     def signal_eels_interval(self) -> typing.Optional[EELSInterval]:
@@ -143,7 +151,7 @@ class EELSEdge(Observable.Observable):
         return self.__fit_eels_intervals
 
     def _write_to_dict(self) -> typing.Dict:
-        d = dict()
+        d = {"uuid": str(self.__uuid)}
         if self.__signal_eels_interval:
             d["signal_eels_interval"] = self.__signal_eels_interval._write_to_dict()
         if len(self.__fit_eels_intervals) > 0:
@@ -191,6 +199,12 @@ class EELSQuantification(Observable.Observable):
     def eels_edges(self) -> typing.List[EELSEdge]:
         return self.__eels_edges
 
+    def get_eels_edge_from_uuid(self, eels_edge_uuid: uuid.UUID) -> typing.Optional[EELSEdge]:
+        for eels_edge in self.eels_edges:
+            if eels_edge.uuid == eels_edge_uuid:
+                return eels_edge
+        return None
+
     def __write(self) -> None:
         self.__data_structure.set_property_value("eels_edges", [eels_edge._write_to_dict() for eels_edge in self.eels_edges])
 
@@ -199,35 +213,189 @@ class EELSQuantification(Observable.Observable):
             self.__eels_edges.append(EELSEdge(d=eels_edge_d))
 
 
-class EELSEdgeDisplay(Observable.Observable):
-    """Display settings for an EELS edge."""
+class EELSEdgeDisplay:
 
-    def __init__(self, eels_edge: EELSEdge, update_fn, *, is_visible: bool = True):
-        super().__init__()
+    def __init__(self, eels_edge: EELSEdge, should_hide_fn):
         self.__eels_edge = eels_edge
-        self.__update_fn = update_fn
-        self.__is_visible = is_visible
+        self.__should_hide_fn = should_hide_fn
+        self.background_data_item = None
+        self.signal_data_item = None
+        self.signal_interval_graphic = None
+        self.fit_interval_graphics = list()
+        self.computation = None
+        self.__signal_interval_connection = None
+        self.__interval_list_connection = None
+        self.__signal_interval_about_to_close_connection = None
+        self.__computation_about_to_close_connection = None
+
+    def close(self):
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
 
     @property
     def eels_edge(self) -> EELSEdge:
         return self.__eels_edge
 
-    @property
-    def is_visible(self) -> bool:
-        return self.__is_visible
+    def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
 
-    @is_visible.setter
-    def is_visible(self, value: bool) -> None:
-        self.__is_visible = value
-        self.__update_fn()
+        # create new data items for signal and background, add them to the document model
+        if self.signal_data_item:
+            signal_data_item = self.signal_data_item
+        else:
+            signal_data_item = DataItem.DataItem()
+            document_model.append_data_item(signal_data_item, auto_display=False)
+            signal_data_item.title = f"{eels_data_item.title} Signal"
+        if self.background_data_item:
+            background_data_item = self.background_data_item
+        else:
+            background_data_item = DataItem.DataItem()
+            document_model.append_data_item(background_data_item, auto_display=False)
+            background_data_item.title = f"{eels_data_item.title} Background"
 
-    def _write_to_dict(self) -> typing.Dict:
-        return {"is_visible": self.is_visible}
+        # create display data channels and display layers for signal and background
+        background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
+        if not background_display_data_channel:
+            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(background_data_item))
+            background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
+            background_data_item_index = eels_display_item.display_data_channels.index(background_display_data_channel)
+            eels_display_item.insert_display_layer(0, data_index=background_data_item_index)
+            eels_display_item._set_display_layer_property(0, "label", _("Background"))
+            eels_display_item._set_display_layer_property(0, "fill_color", "rgba(255, 0, 0, 0.3)")
 
-    @staticmethod
-    def from_d(eels_edge: EELSEdge, update_fn, d: typing.Dict) -> "EELSEdgeDisplay":
-        is_visible = d.get("is_visible", False)
-        return EELSEdgeDisplay(eels_edge, update_fn, is_visible=is_visible)
+        signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
+        if not signal_display_data_channel:
+            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(signal_data_item))
+            signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
+            signal_data_item_index = eels_display_item.display_data_channels.index(signal_display_data_channel)
+            eels_display_item.insert_display_layer(0, data_index=signal_data_item_index)
+            eels_display_item._set_display_layer_property(0, "label", _("Signal"))
+            eels_display_item._set_display_layer_property(0, "fill_color", "lime")
+
+        # useful values
+        eels_data_len = eels_data_item.data_shape[-1]
+        eels_calibration = eels_data_item.dimensional_calibrations[-1]
+
+        # create the signal interval graphic
+        if self.signal_interval_graphic:
+            signal_interval_graphic = self.signal_interval_graphic
+        else:
+            signal_interval_graphic = Graphics.IntervalGraphic()
+            signal_interval_graphic.interval = self.__eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
+            eels_display_item.add_graphic(signal_interval_graphic)
+
+        # watch for signal graphic being deleted and treat it like hiding
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
+
+        def signal_interval_graphic_removed():
+            self.signal_interval_graphic = None
+            self.__should_hide_fn(self)
+
+        self.__signal_interval_about_to_close_connection = signal_interval_graphic.about_to_be_removed_event.listen(signal_interval_graphic_removed)
+
+        # bind signal interval graphic to signal interval
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        self.__signal_interval_connection = IntervalConnection(eels_data_item, self.__eels_edge, "signal_eels_interval", signal_interval_graphic)
+
+        # create the fit interval graphics
+        fit_interval_graphics = self.fit_interval_graphics
+        for index, fit_eels_interval in enumerate(self.__eels_edge.fit_eels_intervals):
+            if len(fit_interval_graphics) <= index:
+                fit_interval_graphic = Graphics.IntervalGraphic()
+                eels_display_item.add_graphic(fit_interval_graphic)
+                fit_interval_graphics.append(fit_interval_graphic)
+            else:
+                fit_interval_graphic = fit_interval_graphics[index]
+            fit_interval_graphic.interval = fit_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
+
+        # create the computation to compute background and signal
+        if self.computation:
+            computation = self.computation
+        else:
+            computation = document_model.create_computation()
+            computation.processing_id = "eels.background_subtraction2"
+            computation.source = eels_display_item
+            computation.create_variable("eels_edge_uuid", "string", str(self.eels_edge.uuid))
+            computation.create_object("eels_spectrum_data_item", document_model.get_object_specifier(eels_data_item))
+            computation.create_objects("fit_interval_graphics", [document_model.get_object_specifier(fit_interval_graphic) for fit_interval_graphic in fit_interval_graphics])
+            computation.create_object("signal_interval_graphic", document_model.get_object_specifier(signal_interval_graphic))
+            computation.create_result("subtracted", document_model.get_object_specifier(signal_data_item))
+            computation.create_result("background", document_model.get_object_specifier(background_data_item))
+            document_model.append_computation(computation)
+
+        # bind fit interval graphics to fit intervals
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
+
+        self.__interval_list_connection = IntervalListConnection(document_model, eels_display_item, eels_data_item, self.__eels_edge, fit_interval_graphics, computation)
+
+        # watch for computation being removed
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
+
+        def computation_removed():
+            self.computation = None
+            # computation will delete the two data items
+            self.background_data_item = None
+            self.signal_data_item = None
+            self.__should_hide_fn(self)
+
+        self.__computation_about_to_close_connection = computation.about_to_be_removed_event.listen(computation_removed)
+
+        # enable the legend display
+        eels_display_item.set_display_property("legend_position", "top-right")
+
+        # store values
+        self.background_data_item = background_data_item
+        self.signal_data_item = signal_data_item
+        self.signal_interval_graphic = signal_interval_graphic
+        self.fit_interval_graphics = fit_interval_graphics
+        self.computation = computation
+
+    def hide(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem) -> None:
+        if self.__signal_interval_connection:
+            self.__signal_interval_connection.close()
+            self.__signal_interval_connection = None
+        if self.__interval_list_connection:
+            self.__interval_list_connection.close()
+            self.__interval_list_connection = None
+        if self.__signal_interval_about_to_close_connection:
+            self.__signal_interval_about_to_close_connection.close()
+            self.__signal_interval_about_to_close_connection = None
+        if self.__computation_about_to_close_connection:
+            self.__computation_about_to_close_connection.close()
+            self.__computation_about_to_close_connection = None
+        if self.computation:
+            document_model.remove_computation(self.computation)
+            self.computation = None
+        if self.signal_interval_graphic:
+            eels_display_item.remove_graphic(self.signal_interval_graphic)
+            self.signal_interval_graphic = None
+        for graphic in self.fit_interval_graphics:
+            eels_display_item.remove_graphic(graphic)
+        self.fit_interval_graphics = list()
+        # these items should auto remove with the computation
+        if self.background_data_item in document_model.data_items:
+            document_model.remove_data_item(self.background_data_item)
+            self.background_data_item = None
+        if self.signal_data_item in document_model.data_items:
+            document_model.remove_data_item(self.signal_data_item)
+            self.signal_data_item = None
 
 
 class EELSQuantificationDisplay(Observable.Observable):
@@ -245,49 +413,18 @@ class EELSQuantificationDisplay(Observable.Observable):
 
         self.__read()
 
-        def eels_edge_inserted(key: str, value, before_index: int) -> None:
-            if key == "eels_edges":
-                eels_edge = value
-                eels_edge_display = EELSEdgeDisplay(eels_edge, self.__write)
-                self.__eels_edge_displays.insert(before_index, eels_edge_display)
-                self.notify_insert_item("eels_edge_displays", eels_edge_display, before_index)
-                self.__write()
-
         def eels_edge_removed(key: str, value, index: int) -> None:
             if key == "eels_edges":
-                eels_edge_display = self.__eels_edge_displays[index]
-                self.__eels_edge_displays.remove(eels_edge_display)
-                self.notify_remove_item("eels_edge_displays", eels_edge_display, index)
-                self.__write()
+                eels_edge = value
+                eels_edge_display = self.get_eels_edge_display_for_eels_edge(eels_edge)
+                if eels_edge_display:
+                    self.__should_hide(eels_edge_display)
 
-        self.__eels_quantification_item_inserted_event_listener = self.__eels_quantification.item_inserted_event.listen(eels_edge_inserted)
         self.__eels_quantification_item_removed_event_listener = self.__eels_quantification.item_removed_event.listen(eels_edge_removed)
 
-        def document_model_item_inserted(key: str, value, before_index: int) -> None:
-            if not self.eels_data_item and key == "data_items":
-                self.eels_data_item = self.__data_structure.get_referenced_object("eels_data_item")
-            if not self.eels_display_item and key == "display_items":
-                self.eels_display_item = self.__data_structure.get_referenced_object("eels_display_item")
-
-        def document_model_item_removed(key: str, value, index: int) -> None:
-            if key == "data_items" and value == self.eels_data_item:
-                self.eels_data_item = None
-            if key == "display_items" and value == self.eels_display_item:
-                self.eels_display_item = None
-
-        self.__item_inserted_event_listener = self.__document_model.item_inserted_event.listen(document_model_item_inserted)
-        self.__item_removed_event_listener = self.__document_model.item_removed_event.listen(document_model_item_removed)
-
-
     def close(self):
-        self.__eels_quantification_item_inserted_event_listener.close()
-        self.__eels_quantification_item_inserted_event_listener = None
         self.__eels_quantification_item_removed_event_listener.close()
         self.__eels_quantification_item_removed_event_listener = None
-        self.__item_inserted_event_listener.close()
-        self.__item_inserted_event_listener = None
-        self.__item_removed_event_listener.close()
-        self.__item_removed_event_listener = None
 
     @property
     def document_model(self) -> DocumentModel.DocumentModel:
@@ -305,19 +442,114 @@ class EELSQuantificationDisplay(Observable.Observable):
     def eels_edge_displays(self) -> typing.List[EELSEdgeDisplay]:
         return self.__eels_edge_displays
 
+    def get_eels_edge_display_for_eels_edge(self, eels_edge: EELSEdge) -> typing.Optional[EELSEdgeDisplay]:
+        for eels_edge_display in self.__eels_edge_displays:
+            if eels_edge_display.eels_edge == eels_edge:
+                return eels_edge_display
+        return None
+
     def __write(self) -> None:
-        self.__data_structure.set_property_value("eels_edge_displays", [eels_edge_display._write_to_dict() for eels_edge_display in self.__eels_edge_displays])
+        self.__data_structure.set_property_value("eels_edge_displays", [{"eels_edge_uuid": str(eels_edge_display.eels_edge.uuid)} for eels_edge_display in self.__eels_edge_displays])
         self.__data_structure.set_referenced_object("eels_display_item", self.eels_display_item)
         self.__data_structure.set_referenced_object("eels_data_item", self.eels_data_item)
 
     def __read(self) -> None:
-        eels_edge_display_d_list = self.__data_structure.get_property_value("eels_edge_displays", list())
-        while len(eels_edge_display_d_list) < len(self.__eels_quantification.eels_edges):
-            eels_edge_display_d_list.append({"is_visible": False})
-        for eels_edge, eels_edge_display_d in zip(self.__eels_quantification.eels_edges, eels_edge_display_d_list):
-            self.__eels_edge_displays.append(EELSEdgeDisplay.from_d(eels_edge, self.__write, eels_edge_display_d))
         self.eels_data_item = self.__data_structure.get_referenced_object("eels_data_item")
         self.eels_display_item = self.__data_structure.get_referenced_object("eels_display_item")
+
+        computation_map = dict()
+        for computation in self.__document_model.computations:
+            if computation.processing_id == "eels.background_subtraction2" and computation.source == self.eels_display_item:
+                computation_map[uuid.UUID(computation._get_variable("eels_edge_uuid").value)] = computation
+
+        eels_edge_display_d_list = self.__data_structure.get_property_value("eels_edge_displays", list())
+        for eels_edge_display_d in eels_edge_display_d_list:
+            eels_edge_uuid = uuid.UUID(eels_edge_display_d["eels_edge_uuid"])
+            if eels_edge_uuid in computation_map:
+                computation = computation_map.pop(eels_edge_uuid)
+                fit_interval_graphics = computation._get_variable("fit_interval_graphics").bound_item.value
+                signal_interval_graphic = computation._get_variable("signal_interval_graphic").bound_item.value
+                subtracted_data_item = computation.get_referenced_object("subtracted")
+                background_data_item = computation.get_referenced_object("background")
+                eels_edge = self.__eels_quantification.get_eels_edge_from_uuid(eels_edge_uuid)
+                assert eels_edge is not None
+                eels_edge_display = EELSEdgeDisplay(eels_edge, self.__should_hide)
+                eels_edge_display.computation = computation
+                eels_edge_display.fit_interval_graphics = fit_interval_graphics
+                eels_edge_display.signal_interval_graphic = signal_interval_graphic
+                eels_edge_display.background_data_item = background_data_item
+                eels_edge_display.signal_data_item = subtracted_data_item
+                self.__eels_edge_displays.append(eels_edge_display)
+
+    def __should_hide(self, eels_edge_display: EELSEdgeDisplay) -> None:
+        eels_edge_display.hide(self.__document_model, self.eels_display_item)
+        self.__eels_edge_displays.remove(eels_edge_display)
+        self.__write()
+
+    def __should_show(self, eels_edge_display: EELSEdgeDisplay) -> None:
+        self.__eels_edge_displays.append(eels_edge_display)
+        self.__write()
+        eels_edge_display.show(self.__document_model, self.eels_display_item, self.eels_data_item)
+
+    def destroy(self) -> None:
+        for eels_edge_display in self.__eels_edge_displays:
+            eels_edge_display.hide(self.__document_model, self.eels_display_item)
+        self.__eels_edge_displays.clear()
+        self.__document_model.remove_data_structure(self.__data_structure)
+        self.__data_structure = None
+
+    def add_eels_edge(self, eels_edge: EELSEdge) -> None:
+        self.__eels_quantification.append_edge(eels_edge)
+
+    def remove_eels_edge(self, eels_edge: EELSEdge) -> None:
+        self.__eels_quantification.remove_edge(self.__eels_quantification.eels_edges.index(eels_edge))
+
+    def add_eels_edge_from_interval_graphic(self, signal_interval_graphic: Graphics.IntervalGraphic) -> EELSEdge:
+        # get the fractional signal interval from the graphic
+        signal_interval = signal_interval_graphic.interval
+
+        # calculate fit intervals ahead and behind the signal
+        fit_ahead_interval = signal_interval[0] * 0.8, signal_interval[0] * 0.9
+        fit_behind_interval = signal_interval[1] * 1.1, signal_interval[1] * 1.2
+
+        # get length and calibration values from the EELS data item
+        eels_data_len = self.eels_data_item.data_shape[-1]
+        eels_data_calibration = self.eels_data_item.dimensional_calibrations[-1]
+
+        # create the signal and two fit EELS intervals
+        signal_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, signal_interval)
+        fit_ahead_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, fit_ahead_interval)
+        fit_behind_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, fit_behind_interval)
+
+        # create the EELS edge object
+        eels_edge = EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_ahead_eels_interval, fit_behind_eels_interval])
+
+        # add the EELS edge object to the quantification object
+        self.__eels_quantification.append_edge(eels_edge)
+
+        # show the edge
+        eels_edge_display = EELSEdgeDisplay(eels_edge, self.__should_hide)
+        eels_edge_display.signal_interval_graphic = signal_interval_graphic
+        self.__should_show(eels_edge_display)
+
+        # return the edge
+        return eels_edge
+
+    def hide_eels_edge(self, eels_edge: EELSEdge) -> None:
+        eels_edge_display = self.get_eels_edge_display_for_eels_edge(eels_edge)
+        if eels_edge_display:
+            self.__should_hide(eels_edge_display)
+
+    def show_eels_edge(self, eels_edge: EELSEdge) -> None:
+        eels_edge_display = self.get_eels_edge_display_for_eels_edge(eels_edge)
+        if not eels_edge_display:
+            assert eels_edge in self.__eels_quantification.eels_edges
+            eels_edge_display = EELSEdgeDisplay(eels_edge, self.__should_hide)
+            self.__should_show(eels_edge_display)
+
+    def is_eels_edge_visible(self, eels_edge: EELSEdge) -> bool:
+        eels_edge_display = self.get_eels_edge_display_for_eels_edge(eels_edge)
+        return eels_edge_display is not None
 
 
 class Singleton(type):
@@ -424,6 +656,10 @@ class EELSQuantificationManager:
             if eels_quantification_display.data_structure == data_structure:
                 return eels_quantification_display
         return EELSQuantificationDisplay(eels_quantification, data_structure)
+
+    def destroy_eels_quantification_display(self, eels_quantification_display: EELSQuantificationDisplay) -> None:
+        eels_quantification_display.destroy()
+        eels_quantification_display.close()
 
     def get_eels_quantification_displays(self, eels_quantification: EELSQuantification) -> typing.List[EELSQuantificationDisplay]:
         return [eels_quantification_display for eels_quantification_display in self.__eels_quantification_displays if eels_quantification_display.eels_quantification == eels_quantification]
@@ -570,278 +806,3 @@ class IntervalListConnection:
         for interval_graphic_listener in self.__fit_interval_graphic_about_to_be_removed_listeners:
             interval_graphic_listener.close()
         self.__fit_interval_graphic_about_to_be_removed_listeners = None
-
-
-class EELSEdgeDisplayView:
-
-    def __init__(self, eels_edge_display: EELSEdgeDisplay):
-        self.__eels_edge_display = eels_edge_display
-        self.__eels_edge = eels_edge_display.eels_edge
-        self.background_data_item = None
-        self.signal_data_item = None
-        self.signal_interval_graphic = None
-        self.fit_interval_graphics = list()
-        self.computation = None
-        self.__signal_interval_connection = None
-        self.__interval_list_connection = None
-        self.__signal_interval_about_to_close_connection = None
-        self.__computation_about_to_close_connection = None
-
-    def close(self):
-        if self.__signal_interval_connection:
-            self.__signal_interval_connection.close()
-            self.__signal_interval_connection = None
-        if self.__interval_list_connection:
-            self.__interval_list_connection.close()
-            self.__interval_list_connection = None
-        if self.__signal_interval_about_to_close_connection:
-            self.__signal_interval_about_to_close_connection.close()
-            self.__signal_interval_about_to_close_connection = None
-        if self.__computation_about_to_close_connection:
-            self.__computation_about_to_close_connection.close()
-            self.__computation_about_to_close_connection = None
-
-    def show(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> None:
-
-        # create new data items for signal and background, add them to the document model
-        if self.signal_data_item:
-            signal_data_item = self.signal_data_item
-        else:
-            signal_data_item = DataItem.DataItem()
-            document_model.append_data_item(signal_data_item, auto_display=False)
-            signal_data_item.title = f"{eels_data_item.title} Signal"
-        if self.background_data_item:
-            background_data_item = self.background_data_item
-        else:
-            background_data_item = DataItem.DataItem()
-            document_model.append_data_item(background_data_item, auto_display=False)
-            background_data_item.title = f"{eels_data_item.title} Background"
-
-        # create display data channels and display layers for signal and background
-        background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
-        if not background_display_data_channel:
-            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(background_data_item))
-            background_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(background_data_item)
-            background_data_item_index = eels_display_item.display_data_channels.index(background_display_data_channel)
-            eels_display_item.insert_display_layer(0, data_index=background_data_item_index)
-            eels_display_item._set_display_layer_property(0, "label", _("Background"))
-            eels_display_item._set_display_layer_property(0, "fill_color", "rgba(255, 0, 0, 0.3)")
-
-        signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
-        if not signal_display_data_channel:
-            eels_display_item.append_display_data_channel(DisplayItem.DisplayDataChannel(signal_data_item))
-            signal_display_data_channel = eels_display_item.get_display_data_channel_for_data_item(signal_data_item)
-            signal_data_item_index = eels_display_item.display_data_channels.index(signal_display_data_channel)
-            eels_display_item.insert_display_layer(0, data_index=signal_data_item_index)
-            eels_display_item._set_display_layer_property(0, "label", _("Signal"))
-            eels_display_item._set_display_layer_property(0, "fill_color", "lime")
-
-        # useful values
-        eels_data_len = eels_data_item.data_shape[-1]
-        eels_calibration = eels_data_item.dimensional_calibrations[-1]
-
-        # create the signal interval graphic
-        if self.signal_interval_graphic:
-            signal_interval_graphic = self.signal_interval_graphic
-        else:
-            signal_interval_graphic = Graphics.IntervalGraphic()
-            signal_interval_graphic.interval = self.__eels_edge.signal_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
-            eels_display_item.add_graphic(signal_interval_graphic)
-
-        # watch for signal graphic being deleted and treat it like hiding
-        if self.__signal_interval_about_to_close_connection:
-            self.__signal_interval_about_to_close_connection.close()
-            self.__signal_interval_about_to_close_connection = None
-
-        def signal_interval_graphic_removed():
-            self.signal_interval_graphic = None
-            self.hide(document_model, eels_display_item)
-
-        self.__signal_interval_about_to_close_connection = signal_interval_graphic.about_to_be_removed_event.listen(signal_interval_graphic_removed)
-
-        # bind signal interval graphic to signal interval
-        if self.__signal_interval_connection:
-            self.__signal_interval_connection.close()
-            self.__signal_interval_connection = None
-        self.__signal_interval_connection = IntervalConnection(eels_data_item, self.__eels_edge, "signal_eels_interval", signal_interval_graphic)
-
-        # create the fit interval graphics
-        fit_interval_graphics = self.fit_interval_graphics
-        for index, fit_eels_interval in enumerate(self.__eels_edge.fit_eels_intervals):
-            if len(fit_interval_graphics) <= index:
-                fit_interval_graphic = Graphics.IntervalGraphic()
-                eels_display_item.add_graphic(fit_interval_graphic)
-                fit_interval_graphics.append(fit_interval_graphic)
-            else:
-                fit_interval_graphic = fit_interval_graphics[index]
-            fit_interval_graphic.interval = fit_eels_interval.to_fractional_interval(eels_data_len, eels_calibration)
-
-        # create the computation to compute background and signal
-        if self.computation:
-            computation = self.computation
-        else:
-            computation = document_model.create_computation()
-            computation.processing_id = "eels.background_subtraction2"
-            computation.source = eels_display_item
-            computation.create_object("eels_spectrum_data_item", document_model.get_object_specifier(eels_data_item))
-            computation.create_objects("fit_interval_graphics", [document_model.get_object_specifier(fit_interval_graphic) for fit_interval_graphic in fit_interval_graphics])
-            computation.create_object("signal_interval_graphic", document_model.get_object_specifier(signal_interval_graphic))
-            computation.create_result("subtracted", document_model.get_object_specifier(signal_data_item))
-            computation.create_result("background", document_model.get_object_specifier(background_data_item))
-            document_model.append_computation(computation)
-
-        # bind fit interval graphics to fit intervals
-        if self.__interval_list_connection:
-            self.__interval_list_connection.close()
-            self.__interval_list_connection = None
-
-        self.__interval_list_connection = IntervalListConnection(document_model, eels_display_item, eels_data_item, self.__eels_edge, fit_interval_graphics, computation)
-
-        # watch for computation being removed
-        if self.__computation_about_to_close_connection:
-            self.__computation_about_to_close_connection.close()
-            self.__computation_about_to_close_connection = None
-
-        def computation_removed():
-            self.computation = None
-            # computation will delete the two data items
-            self.background_data_item = None
-            self.signal_data_item = None
-            self.hide(document_model, eels_display_item)
-
-        self.__computation_about_to_close_connection = computation.about_to_be_removed_event.listen(computation_removed)
-
-        # enable the legend display
-        eels_display_item.set_display_property("legend_position", "top-right")
-
-        # store values
-        self.background_data_item = background_data_item
-        self.signal_data_item = signal_data_item
-        self.signal_interval_graphic = signal_interval_graphic
-        self.fit_interval_graphics = fit_interval_graphics
-        self.computation = computation
-        self.__eels_edge_display.is_visible = True
-
-    def hide(self, document_model: DocumentModel.DocumentModel, eels_display_item: DisplayItem.DisplayItem) -> None:
-        if self.__signal_interval_connection:
-            self.__signal_interval_connection.close()
-            self.__signal_interval_connection = None
-        if self.__interval_list_connection:
-            self.__interval_list_connection.close()
-            self.__interval_list_connection = None
-        if self.__signal_interval_about_to_close_connection:
-            self.__signal_interval_about_to_close_connection.close()
-            self.__signal_interval_about_to_close_connection = None
-        if self.__computation_about_to_close_connection:
-            self.__computation_about_to_close_connection.close()
-            self.__computation_about_to_close_connection = None
-        if self.computation:
-            document_model.remove_computation(self.computation)
-            self.computation = None
-        if self.signal_interval_graphic:
-            eels_display_item.remove_graphic(self.signal_interval_graphic)
-            self.signal_interval_graphic = None
-        for graphic in self.fit_interval_graphics:
-            eels_display_item.remove_graphic(graphic)
-        self.fit_interval_graphics = list()
-        # these items should auto remove with the computation
-        if self.background_data_item in document_model.data_items:
-            document_model.remove_data_item(self.background_data_item)
-            self.background_data_item = None
-        if self.signal_data_item in document_model.data_items:
-            document_model.remove_data_item(self.signal_data_item)
-            self.signal_data_item = None
-        self.__eels_edge_display.is_visible = False
-
-
-class EELSQuantificationController:
-    """Controller between a line plot display item and an EELS quantification display.
-
-    Handles the following situations:
-        - initial attachment
-        - reading and writing
-        - enabling/disabling line plot layers
-    """
-
-    def __init__(self, document_model: DocumentModel.DocumentModel, eels_quantification_display: EELSQuantificationDisplay):
-        self.__document_model = document_model
-        self.__eels_display_item = eels_quantification_display.eels_display_item
-        self.__eels_data_item = eels_quantification_display.eels_data_item
-        self.__eels_quantification_display = eels_quantification_display
-        self.__eels_quantification = eels_quantification_display.eels_quantification
-        self.__eels_edge_views_map = dict()
-        self.__pending_signal_interval_graphic = None
-
-        # watch for EELS edge displays added or removed and configure appropriately
-
-        def eels_edge_display_inserted(key, value, before_index):
-            if key == "eels_edge_displays":
-                eels_edge_display = value
-                eels_edge = eels_edge_display.eels_edge
-                eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
-                if not eels_edge_display_view:
-                    eels_edge_display_view = EELSEdgeDisplayView(eels_edge_display)
-                    eels_edge_display_view.signal_interval_graphic = self.__pending_signal_interval_graphic
-                    self.__pending_signal_interval_graphic = None
-                    self.__eels_edge_views_map[eels_edge] = eels_edge_display_view
-                eels_edge_display_view.show(document_model, self.__eels_display_item, self.__eels_data_item)
-
-        def eels_edge_display_removed(key, value, index):
-            if key == "eels_edge_displays":
-                eels_edge_display = value
-                eels_edge = eels_edge_display.eels_edge
-                eels_edge_display_view = self.__eels_edge_views_map.get(eels_edge)
-                if eels_edge_display_view:
-                    eels_edge_display_view.hide(document_model, self.__eels_display_item)
-
-        self.__eels_quantification_display_item_inserted_event_listener = self.__eels_quantification_display.item_inserted_event.listen(eels_edge_display_inserted)
-        self.__eels_quantification_display_item_removed_event_listener = self.__eels_quantification_display.item_removed_event.listen(eels_edge_display_removed)
-
-        for index, eels_edge_display in enumerate(self.__eels_quantification_display.eels_edge_displays):
-            eels_edge_display_inserted("eels_edge_displays", eels_edge_display, index)
-
-    def close(self):
-        self.__eels_quantification_display_item_inserted_event_listener.close()
-        self.__eels_quantification_display_item_inserted_event_listener = None
-        self.__eels_quantification_display_item_removed_event_listener.close()
-        self.__eels_quantification_display_item_removed_event_listener = None
-
-    def add_eels_edge(self, eels_edge: EELSEdge) -> None:
-        self.__eels_quantification.append_edge(eels_edge)
-
-    def remove_eels_edge(self, eels_edge: EELSEdge) -> None:
-        self.__eels_quantification.remove_edge(self.__eels_quantification.eels_edges.index(eels_edge))
-
-    def add_eels_edge_from_interval_graphic(self, signal_interval_graphic: Graphics.IntervalGraphic) -> EELSEdge:
-        # get the fractional signal interval from the graphic
-        signal_interval = signal_interval_graphic.interval
-
-        # calculate fit intervals ahead and behind the signal
-        fit_ahead_interval = signal_interval[0] * 0.8, signal_interval[0] * 0.9
-        fit_behind_interval = signal_interval[1] * 1.1, signal_interval[1] * 1.2
-
-        # get length and calibration values from the EELS data item
-        eels_data_len = self.__eels_data_item.data_shape[-1]
-        eels_data_calibration = self.__eels_data_item.dimensional_calibrations[-1]
-
-        # create the signal and two fit EELS intervals
-        signal_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, signal_interval)
-        fit_ahead_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, fit_ahead_interval)
-        fit_behind_eels_interval = EELSInterval.from_fractional_interval(eels_data_len, eels_data_calibration, fit_behind_interval)
-
-        # create the EELS edge object
-        eels_edge = EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_ahead_eels_interval, fit_behind_eels_interval])
-
-        # add the EELS edge object to the quantification object
-        # the pending signal interval graphic allows the created EELS display view to use existing signal interval graphic
-        self.__pending_signal_interval_graphic = signal_interval_graphic
-        self.add_eels_edge(eels_edge)
-
-        # return the edge
-        return eels_edge
-
-    def hide_eels_edge(self, eels_edge: EELSEdge) -> None:
-        self.__eels_edge_views_map[eels_edge].hide(self.__document_model, self.__eels_display_item)
-
-    def show_eels_edge(self, eels_edge: EELSEdge) -> None:
-        self.__eels_edge_views_map[eels_edge].show(self.__document_model, self.__eels_display_item, self.__eels_data_item)

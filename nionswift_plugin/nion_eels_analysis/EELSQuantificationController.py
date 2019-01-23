@@ -103,7 +103,7 @@ class EELSEdge(Observable.Observable):
         self.__electron_shell = electron_shell
         self.fit_eels_interval_changed = Event.Event()
         if d is not None:
-            self.__uuid = uuid.UUID(d.get("uuid"))
+            self.__uuid = uuid.UUID(d.get("uuid", str(uuid.uuid4())))
             self.__signal_eels_interval = EELSInterval.from_d(d.get("signal_eels_interval"))
             self.__fit_eels_intervals = [EELSInterval.from_d(fit_interval_d) for fit_interval_d in d.get("fit_eels_intervals", list())]
             self.__electron_shell = PeriodicTable.ElectronShell.from_d(d.get("electron_shell"))
@@ -172,6 +172,18 @@ class EELSQuantification(Observable.Observable):
         self.__eels_edges = list()
         self.__data_structure = data_structure
         self.__read()
+
+    def destroy(self) -> None:
+        while len(self.__eels_edges) > 0:
+            eels_edge = self.__eels_edges[-1]
+            self.__eels_edges.remove(eels_edge)
+            self.notify_remove_item("eels_edges", eels_edge, len(self.__eels_edges))
+        if self.__data_structure:
+            self.__document_model.remove_data_structure(self.__data_structure)
+        self.__data_structure = None
+
+    def _data_structure_deleted(self):
+        self.__data_structure = None
 
     @property
     def document_model(self) -> DocumentModel.DocumentModel:
@@ -298,11 +310,11 @@ class EELSEdgeDisplay:
             self.__signal_interval_about_to_close_connection.close()
             self.__signal_interval_about_to_close_connection = None
 
-        def signal_interval_graphic_removed():
+        def signal_interval_graphic_removed(cascade_items: typing.List) -> None:
             self.signal_interval_graphic = None
             self.__should_hide_fn(self)
 
-        self.__signal_interval_about_to_close_connection = signal_interval_graphic.about_to_be_removed_event.listen(signal_interval_graphic_removed)
+        self.__signal_interval_about_to_close_connection = signal_interval_graphic.about_to_cascade_delete_event.listen(signal_interval_graphic_removed)
 
         # bind signal interval graphic to signal interval
         if self.__signal_interval_connection:
@@ -348,14 +360,14 @@ class EELSEdgeDisplay:
             self.__computation_about_to_close_connection.close()
             self.__computation_about_to_close_connection = None
 
-        def computation_removed():
+        def computation_removed(cascade_items: typing.List) -> None:
             self.computation = None
             # computation will delete the two data items
             self.background_data_item = None
             self.signal_data_item = None
             self.__should_hide_fn(self)
 
-        self.__computation_about_to_close_connection = computation.about_to_be_removed_event.listen(computation_removed)
+        self.__computation_about_to_close_connection = computation.about_to_cascade_delete_event.listen(computation_removed)
 
         # enable the legend display
         eels_display_item.set_display_property("legend_position", "top-right")
@@ -401,11 +413,12 @@ class EELSEdgeDisplay:
 class EELSQuantificationDisplay(Observable.Observable):
     """Display settings for an EELS quantification."""
 
-    def __init__(self, eels_quantification: EELSQuantification, data_structure: DataStructure.DataStructure):
+    def __init__(self, eels_quantification: EELSQuantification, data_structure: DataStructure.DataStructure, should_remove_fn):
         super().__init__()
 
         self.__data_structure = data_structure
         self.__eels_quantification = eels_quantification
+        self.__should_remove_fn = should_remove_fn
         self.__document_model = eels_quantification.document_model
         self.eels_display_item = None
         self.eels_data_item = None
@@ -425,6 +438,12 @@ class EELSQuantificationDisplay(Observable.Observable):
     def close(self):
         self.__eels_quantification_item_removed_event_listener.close()
         self.__eels_quantification_item_removed_event_listener = None
+        if self.__eels_data_item_about_to_be_removed_event_listener:
+            self.__eels_data_item_about_to_be_removed_event_listener.close()
+            self.__eels_data_item_about_to_be_removed_event_listener = None
+        if self.__eels_display_item_about_to_be_removed_event_listener:
+            self.__eels_display_item_about_to_be_removed_event_listener.close()
+            self.__eels_display_item_about_to_be_removed_event_listener = None
 
     @property
     def document_model(self) -> DocumentModel.DocumentModel:
@@ -457,14 +476,22 @@ class EELSQuantificationDisplay(Observable.Observable):
         self.eels_data_item = self.__data_structure.get_referenced_object("eels_data_item")
         self.eels_display_item = self.__data_structure.get_referenced_object("eels_display_item")
 
+        def notify_remove(cascade_items: typing.List) -> None:
+            self.__should_remove_fn(self)
+
+        self.__eels_data_item_about_to_be_removed_event_listener = self.eels_data_item.about_to_cascade_delete_event.listen(notify_remove) if self.eels_data_item else None
+        self.__eels_display_item_about_to_be_removed_event_listener = self.eels_display_item.about_to_cascade_delete_event.listen(notify_remove) if self.eels_display_item else None
+
         computation_map = dict()
         for computation in self.__document_model.computations:
             if computation.processing_id == "eels.background_subtraction2" and computation.source == self.eels_display_item:
-                computation_map[uuid.UUID(computation._get_variable("eels_edge_uuid").value)] = computation
+                eels_edge_uuid_var = computation._get_variable("eels_edge_uuid")
+                if eels_edge_uuid_var:
+                    computation_map[uuid.UUID(eels_edge_uuid_var.value)] = computation
 
         eels_edge_display_d_list = self.__data_structure.get_property_value("eels_edge_displays", list())
         for eels_edge_display_d in eels_edge_display_d_list:
-            eels_edge_uuid = uuid.UUID(eels_edge_display_d["eels_edge_uuid"])
+            eels_edge_uuid = uuid.UUID(eels_edge_display_d.get("eels_edge_uuid", str(uuid.uuid4())))
             if eels_edge_uuid in computation_map:
                 computation = computation_map.pop(eels_edge_uuid)
                 fit_interval_graphics = computation._get_variable("fit_interval_graphics").bound_item.value
@@ -591,6 +618,10 @@ class EELSQuantificationManager:
             self.__eels_quantifications.insert(before_index, EELSQuantification(self.__document_model, value))
 
         def eels_quantification_list_item_removed(key: str, value: DataStructure.DataStructure, index: int) -> None:
+            for eels_quantification in self.__eels_quantifications:
+                if eels_quantification.data_structure == value:
+                    eels_quantification._data_structure_deleted()
+                    self.destroy_eels_quantification(eels_quantification)
             self.__eels_quantifications.pop(index)
 
         self.__eels_quantification_list_item_inserted_event_listener = self.__eels_quantification_list_model.item_inserted_event.listen(eels_quantification_list_item_inserted)
@@ -610,7 +641,12 @@ class EELSQuantificationManager:
                 if eels_quantification_.data_structure == value.source:
                     eels_quantification = eels_quantification_
                     break
-            self.__eels_quantification_displays.insert(before_index, EELSQuantificationDisplay(eels_quantification, data_structure))
+
+            def should_remove(eels_quantification_display: EELSQuantificationDisplay) -> None:
+                if eels_quantification_display in self.get_eels_quantification_displays(eels_quantification):
+                    self.destroy_eels_quantification_display(eels_quantification_display)
+
+            self.__eels_quantification_displays.insert(before_index, EELSQuantificationDisplay(eels_quantification, data_structure, should_remove))
 
         def eels_quantification_display_list_item_removed(key: str, value: DataStructure.DataStructure, index: int) -> None:
             self.__eels_quantification_displays.pop(index)
@@ -645,7 +681,13 @@ class EELSQuantificationManager:
         for eels_quantification in self.__eels_quantifications:
             if eels_quantification.data_structure == data_structure:
                 return eels_quantification
+        # should never reach this point since object is created automatically by inserting data structure into document model
         return EELSQuantification(self.__document_model, data_structure)
+
+    def destroy_eels_quantification(self, eels_quantification: EELSQuantification) -> None:
+        for eels_quantification_display in copy.copy(self.get_eels_quantification_displays(eels_quantification)):
+            self.destroy_eels_quantification_display(eels_quantification_display)
+        eels_quantification.destroy()
 
     def create_eels_quantification_display(self, eels_quantification: EELSQuantification, eels_display_item: DisplayItem.DisplayItem, eels_data_item: DataItem.DataItem) -> EELSQuantificationDisplay:
         data_structure = DataStructure.DataStructure(structure_type="nion.eels_quantification_display", source=eels_quantification.data_structure)
@@ -655,7 +697,8 @@ class EELSQuantificationManager:
         for eels_quantification_display in self.get_eels_quantification_displays(eels_quantification):
             if eels_quantification_display.data_structure == data_structure:
                 return eels_quantification_display
-        return EELSQuantificationDisplay(eels_quantification, data_structure)
+        # should never reach this point since object is created automatically by inserting data structure into document model
+        return EELSQuantificationDisplay(eels_quantification, data_structure, None)
 
     def destroy_eels_quantification_display(self, eels_quantification_display: EELSQuantificationDisplay) -> None:
         eels_quantification_display.destroy()
@@ -721,7 +764,7 @@ class IntervalListConnection:
                 blocked[0] = False
 
         remove_blocked = [False]  # argh.
-        def remove_fit_eels_interval(index: int) -> None:
+        def remove_fit_eels_interval(index: int, cascade_items: typing.List) -> None:
             # this message comes from the library.
             remove_blocked[0] = True
 
@@ -754,7 +797,7 @@ class IntervalListConnection:
 
                 # bind interval graphic to the fit eels interval
                 self.__fit_interval_graphic_property_changed_listeners.insert(before_index, fit_interval_graphic.property_changed_event.listen(functools.partial(update_fit_eels_interval, before_index)))
-                self.__fit_interval_graphic_about_to_be_removed_listeners.insert(before_index, fit_interval_graphic.about_to_be_removed_event.listen(functools.partial(remove_fit_eels_interval, before_index)))
+                self.__fit_interval_graphic_about_to_be_removed_listeners.insert(before_index, fit_interval_graphic.about_to_cascade_delete_event.listen(functools.partial(remove_fit_eels_interval, before_index)))
 
                 # add interval graphic to computation
                 computation.insert_item_into_objects("fit_interval_graphics", before_index, document_model.get_object_specifier(fit_interval_graphic))
@@ -789,7 +832,7 @@ class IntervalListConnection:
 
         for index, fit_interval_graphic in enumerate(fit_interval_graphics):
             self.__fit_interval_graphic_property_changed_listeners.insert(index, fit_interval_graphic.property_changed_event.listen(functools.partial(update_fit_eels_interval, index)))
-            self.__fit_interval_graphic_about_to_be_removed_listeners.insert(index, fit_interval_graphic.about_to_be_removed_event.listen(functools.partial(remove_fit_eels_interval, index)))
+            self.__fit_interval_graphic_about_to_be_removed_listeners.insert(index, fit_interval_graphic.about_to_cascade_delete_event.listen(functools.partial(remove_fit_eels_interval, index)))
 
     def close(self):
         self.__item_inserted_event_listener.close()

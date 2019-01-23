@@ -464,6 +464,7 @@ class TestEELSQuantificationController(unittest.TestCase):
                 eels_display_item = qd.eels_display_item
                 self.assertTrue(qd.is_eels_edge_visible(eels_edge))
                 qd.hide_eels_edge(qd.eels_edge_displays[0].eels_edge)
+                self.assertEqual(1, len(qm.eels_quantifications))
                 self.assertEqual(0, len(qd.eels_edge_displays))
                 self.assertEqual(1, len(eels_display_item.display_data_channels))
                 self.assertEqual(1, len(eels_display_item.display_layers))
@@ -490,6 +491,7 @@ class TestEELSQuantificationController(unittest.TestCase):
                 qd = qm.create_eels_quantification_display(q, eels_display_item, eels_data_item)
                 qd.show_eels_edge(eels_edge)
                 qm.destroy_eels_quantification_display(qd)
+                self.assertEqual(1, len(qm.eels_quantifications))
                 self.assertEqual(0, len(qm.get_eels_quantification_displays(q)))
                 self.assertEqual(1, len(document_model.data_structures))
                 self.assertEqual(1, len(document_model.display_items))
@@ -498,10 +500,101 @@ class TestEELSQuantificationController(unittest.TestCase):
                 self.assertEqual(1, len(eels_display_item.display_layers))
                 self.assertEqual(0, len(eels_display_item.graphics))
 
-    # test_removing_edge_removes_layers_computation_etc
+    def test_removing_edge_removes_edge_display(self):
+        with create_memory_profile_context() as profile_context:
+            document_model = DocumentModel.DocumentModel(profile=profile_context.create_profile())
+            with contextlib.closing(document_model):
+                qm = EELSQuantificationController.EELSQuantificationManager.get_instance(document_model)
+                q = qm.create_eels_quantification()
+                signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+                fit_eels_interval = EELSQuantificationController.EELSInterval(start_ev=160, end_ev=180)
+                eels_edge = EELSQuantificationController.EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_eels_interval])
+                q.append_edge(eels_edge)
+                eels_data_item = self.__create_spectrum()
+                document_model.append_data_item(eels_data_item)
+                eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+                qd = qm.create_eels_quantification_display(q, eels_display_item, eels_data_item)
+                qd.show_eels_edge(eels_edge)
+                q.remove_edge(0)
+                self.assertEqual(1, len(qm.get_eels_quantification_displays(q)))
+                self.assertEqual(2, len(document_model.data_structures))
+                self.assertEqual(0, len(qd.eels_edge_displays))
+                self.assertEqual(1, len(document_model.display_items))
+                self.assertEqual(1, len(document_model.data_items))
+                self.assertEqual(1, len(eels_display_item.display_data_channels))
+                self.assertEqual(1, len(eels_display_item.display_layers))
+                self.assertEqual(0, len(eels_display_item.graphics))
+                self.assertEqual(0, len(document_model.computations))
+
+    def test_removing_quantification_data_structure_removed_quantification(self):
+        with create_memory_profile_context() as profile_context:
+            document_model = DocumentModel.DocumentModel(profile=profile_context.create_profile())
+            with contextlib.closing(document_model):
+                qm = EELSQuantificationController.EELSQuantificationManager.get_instance(document_model)
+                q = qm.create_eels_quantification()
+                signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+                fit_eels_interval = EELSQuantificationController.EELSInterval(start_ev=160, end_ev=180)
+                eels_edge = EELSQuantificationController.EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_eels_interval])
+                q.append_edge(eels_edge)
+                eels_data_item = self.__create_spectrum()
+                document_model.append_data_item(eels_data_item)
+                eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+                qd = qm.create_eels_quantification_display(q, eels_display_item, eels_data_item)
+                qd.show_eels_edge(eels_edge)
+                document_model.remove_data_structure(document_model.data_structures[0])
+                self.assertEqual(0, len(qm.eels_quantifications))
+                self.assertEqual(0, len(qm.get_eels_quantification_displays(q)))
+                self.assertEqual(0, len(document_model.data_structures))
+                self.assertEqual(1, len(document_model.display_items))
+                self.assertEqual(1, len(document_model.data_items))
+                self.assertEqual(1, len(eels_display_item.display_data_channels))
+                self.assertEqual(1, len(eels_display_item.display_layers))
+                self.assertEqual(0, len(eels_display_item.graphics))
+
+    def test_removing_eels_display_item_removes_associated_data_structure(self):
+        with create_memory_profile_context() as profile_context:
+            document_model = DocumentModel.DocumentModel(profile=profile_context.create_profile())
+            with contextlib.closing(document_model):
+                qm = EELSQuantificationController.EELSQuantificationManager.get_instance(document_model)
+                q = qm.create_eels_quantification()
+                signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+                fit_eels_interval = EELSQuantificationController.EELSInterval(start_ev=160, end_ev=180)
+                eels_edge = EELSQuantificationController.EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_eels_interval])
+                q.append_edge(eels_edge)
+                eels_data_item = self.__create_spectrum()
+                document_model.append_data_item(eels_data_item)
+                eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+                qd = qm.create_eels_quantification_display(q, eels_display_item, eels_data_item)
+                qd.show_eels_edge(eels_edge)
+                document_model.remove_display_item(eels_display_item)
+                self.assertEqual(1, len(qm.eels_quantifications))
+                self.assertEqual(0, len(qm.get_eels_quantification_displays(q)))
+                self.assertEqual(1, len(document_model.data_structures))
+                self.assertEqual(0, len(document_model.display_items))
+                self.assertEqual(0, len(document_model.data_items))
+
+    def test_removing_eels_data_item_removes_associated_data_structure(self):
+        with create_memory_profile_context() as profile_context:
+            document_model = DocumentModel.DocumentModel(profile=profile_context.create_profile())
+            with contextlib.closing(document_model):
+                qm = EELSQuantificationController.EELSQuantificationManager.get_instance(document_model)
+                q = qm.create_eels_quantification()
+                signal_eels_interval = EELSQuantificationController.EELSInterval(start_ev=188, end_ev=208)
+                fit_eels_interval = EELSQuantificationController.EELSInterval(start_ev=160, end_ev=180)
+                eels_edge = EELSQuantificationController.EELSEdge(signal_eels_interval=signal_eels_interval, fit_eels_intervals=[fit_eels_interval])
+                q.append_edge(eels_edge)
+                eels_data_item = self.__create_spectrum()
+                document_model.append_data_item(eels_data_item)
+                eels_display_item = document_model.get_display_item_for_data_item(eels_data_item)
+                qd = qm.create_eels_quantification_display(q, eels_display_item, eels_data_item)
+                qd.show_eels_edge(eels_edge)
+                document_model.remove_data_item(eels_data_item)
+                self.assertEqual(1, len(qm.eels_quantifications))
+                self.assertEqual(0, len(qm.get_eels_quantification_displays(q)))
+                self.assertEqual(1, len(document_model.data_structures))
+                self.assertEqual(0, len(document_model.display_items))
+                self.assertEqual(0, len(document_model.data_items))
+
     # test_eels_quantification_display_loads_out_of_order_from_quantification
-    # test_eels_quantification_disconnects_if_data_structure_deleted
-    # test_associated_data_structure_is_removed_when_display_item_removed
     # test_orphan_associated_data_structures_are_removed_on_reload
     # test_deleting_last_background_deletes_edge
-    # test_removing_eels_quantification_removes_associated_data_structure

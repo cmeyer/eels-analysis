@@ -171,6 +171,7 @@ class EELSQuantification(Observable.Observable):
         self.__document_model = document_model
         self.__eels_edges = list()
         self.__data_structure = data_structure
+        self.__title = None
         self.__read()
 
     def destroy(self) -> None:
@@ -217,10 +218,23 @@ class EELSQuantification(Observable.Observable):
                 return eels_edge
         return None
 
+    @property
+    def title(self) -> str:
+        return self.__title or str()
+
+    @title.setter
+    def title(self, value: str) -> None:
+        self.__title = str(value) if value else None
+        self.notify_property_changed("title")
+        self.__write()
+
     def __write(self) -> None:
+        if self.__title:
+            self.__data_structure.set_property_value("title", self.__title)
         self.__data_structure.set_property_value("eels_edges", [eels_edge._write_to_dict() for eels_edge in self.eels_edges])
 
     def __read(self) -> None:
+        self.__title = self.__data_structure.get_property_value("title", None)
         for eels_edge_d in self.__data_structure.get_property_value("eels_edges", list()):
             self.__eels_edges.append(EELSEdge(d=eels_edge_d))
 
@@ -675,8 +689,14 @@ class EELSQuantificationManager:
     def eels_quantifications(self) -> typing.List[EELSQuantification]:
         return self.__eels_quantifications
 
-    def create_eels_quantification(self) -> EELSQuantification:
+    @property
+    def eels_quantifications_model(self) -> ListModel.FilteredListModel:
+        return self.__eels_quantification_list_model
+
+    def create_eels_quantification(self, *, title: str = None) -> EELSQuantification:
         data_structure = DataStructure.DataStructure(structure_type="nion.eels_quantification")
+        if title:
+            data_structure.set_property_value("title", str(title))
         self.__document_model.append_data_structure(data_structure)
         for eels_quantification in self.__eels_quantifications:
             if eels_quantification.data_structure == data_structure:

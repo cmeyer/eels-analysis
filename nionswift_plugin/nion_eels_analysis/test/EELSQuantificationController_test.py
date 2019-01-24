@@ -598,3 +598,4 @@ class TestEELSQuantificationController(unittest.TestCase):
     # test_eels_quantification_display_loads_out_of_order_from_quantification
     # test_orphan_associated_data_structures_are_removed_on_reload
     # test_deleting_last_background_deletes_edge
+    # test_version_1_is_enforced_on_data_structures (to allow v2 to not load in this version in the future)

@@ -2,6 +2,7 @@ import functools
 import gettext
 
 from . import BackgroundSubtraction
+from . import EELSQuantificationPanel
 from . import ElementalMappingPanel
 from . import AlignZLP
 from . import ThicknessMap
@@ -35,6 +36,8 @@ class MenuExtension:
 
         eels_menu = document_window.get_or_create_menu("eels_menu", _("EELS"), "window_menu")
 
+        eels_menu.add_separator()
+        eels_menu.add_menu_item(_("EELS Quantification..."), functools.partial(EELSQuantificationPanel.open_eels_quantification_window, document_window))
         eels_menu.add_separator()
         eels_menu.add_menu_item(_("Subtract Background from Signal"), functools.partial(BackgroundSubtraction.subtract_background_from_signal, api, window))
         eels_menu.add_separator()

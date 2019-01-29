@@ -40,35 +40,43 @@ class EELSMapping:
         self.computation.set_referenced_xdata("map", self.__mapped_xdata)
 
 
+from . import EELSQuantificationController
+from nion.swift import Facade
+
 async def use_interval_as_signal(api, window):
-    target_data_item = window.target_data_item
     target_display = window.target_display
+    target_data_item = Facade.DataItem(target_display._display_item.data_items[0]) if len(target_display._display_item.data_items) > 0 else None
     target_graphic = target_display.selected_graphics[0] if target_display and len(target_display.selected_graphics) == 1 else None
     target_interval = target_graphic if target_graphic and target_graphic.graphic_type == "interval-graphic" else None
     if target_data_item and target_interval:
         target_display_item = api.library._document_model.get_display_item_for_data_item(target_data_item._data_item)
-        interval = target_interval.interval
-        fit_ahead = target_data_item.add_interval_region(interval[0] * 0.8, interval[0] * 0.9)
-        fit_behind = target_data_item.add_interval_region(interval[1] * 1.1, interval[1] * 1.2)
-        background = api.library.create_data_item(title="{} Background".format(target_data_item.title))
-        signal = api.library.create_data_item(title="{} Subtracted".format(target_data_item.title))
-        computation = api.library.create_computation("eels.background_subtraction2", inputs={"eels_spectrum_data_item": target_data_item, "fit_interval_graphics": [fit_ahead, fit_behind], "signal_interval_graphic": target_interval}, outputs={"background": background, "subtracted": signal})
-        computation._computation.source = target_interval._graphic
-        target_interval._graphic.source = computation._computation
-        fit_ahead._graphic.source = target_interval._graphic
-        fit_behind._graphic.source = target_interval._graphic
-        fit_ahead.label = "background"
-        fit_behind.label = "background"
-        target_interval.label = "signal"
-        target_interval._graphic.color = "#0F0"
-        target_display_item.append_display_data_channel_for_data_item(background._data_item)
-        target_display_item.append_display_data_channel_for_data_item(signal._data_item)
-        target_display_item.display_layers = [
-            {"label": "Signal", "data_index": 2, "fill_color": "#0F0"},
-            {"label": "Background", "data_index": 1, "fill_color": "rgba(255, 0, 0, 0.3)"},
-            {"label": "Data", "data_index": 0, "fill_color": "#1E90FF"},
-        ]
-        target_display_item.set_display_property("legend_position", "top-right")
+
+        if True:
+            qm = EELSQuantificationController.EELSQuantificationManager.get_instance(api.library._document_model)
+            qm.add_eels_edge_from_interval_graphic(target_display_item, target_data_item._data_item, target_interval._graphic)
+        else:
+            interval = target_interval.interval
+            fit_ahead = target_data_item.add_interval_region(interval[0] * 0.8, interval[0] * 0.9)
+            fit_behind = target_data_item.add_interval_region(interval[1] * 1.1, interval[1] * 1.2)
+            background = api.library.create_data_item(title="{} Background".format(target_data_item.title))
+            signal = api.library.create_data_item(title="{} Subtracted".format(target_data_item.title))
+            computation = api.library.create_computation("eels.background_subtraction2", inputs={"eels_spectrum_data_item": target_data_item, "fit_interval_graphics": [fit_ahead, fit_behind], "signal_interval_graphic": target_interval}, outputs={"background": background, "subtracted": signal})
+            computation._computation.source = target_interval._graphic
+            target_interval._graphic.source = computation._computation
+            fit_ahead._graphic.source = target_interval._graphic
+            fit_behind._graphic.source = target_interval._graphic
+            fit_ahead.label = "background"
+            fit_behind.label = "background"
+            target_interval.label = "signal"
+            target_interval._graphic.color = "#0F0"
+            target_display_item.append_display_data_channel_for_data_item(background._data_item)
+            target_display_item.append_display_data_channel_for_data_item(signal._data_item)
+            target_display_item.display_layers = [
+                {"label": "Signal", "data_index": 2, "fill_color": "#0F0"},
+                {"label": "Background", "data_index": 1, "fill_color": "rgba(255, 0, 0, 0.3)"},
+                {"label": "Data", "data_index": 0, "fill_color": "#1E90FF"},
+            ]
+            target_display_item.set_display_property("legend_position", "top-right")
 
 
 def use_signal_for_map(api, window):

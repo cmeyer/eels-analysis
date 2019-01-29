@@ -7,10 +7,11 @@ import typing
 
 # local libraries
 from nion.swift import DocumentController
+from nion.swift.model import DisplayItem
 from nion.ui import Declarative
 from nion.ui import Window
+from nion.utils import Event
 from nion.utils import Geometry
-from nion.utils import Model
 from nion.utils import Observable
 
 from . import EELSQuantificationController
@@ -32,9 +33,15 @@ class DeclarativeWindow(Window.Window):
             # event loops simultaneously.
             parent_window.queue_task(self.request_close)
 
+        # make and attach closer for the handler; put handler into container closer
+        self.__closer = Declarative.Closer()
+        if ui_handler and hasattr(ui_handler, "close"):
+            ui_handler._closer = Declarative.Closer()
+            self.__closer.push_closeable(ui_handler)
+
         finishes = list()
 
-        self.widget = Declarative.construct(parent_window.ui, None, ui_widget, ui_handler, finishes)
+        self.widget = Declarative.construct(parent_window.ui, self, ui_widget, ui_handler, finishes)
 
         self.attach_widget(self.widget)
 
@@ -49,13 +56,6 @@ class DeclarativeWindow(Window.Window):
 
         self.__ui_handler = ui_handler
 
-    def about_to_close(self, geometry: str, state: str) -> None:
-        # do this by overriding about_to_close because on_close is reserved for other purposes.
-        ui_handler = self.__ui_handler
-        if ui_handler and hasattr(ui_handler, "close"):
-            ui_handler.close()
-        super().about_to_close(geometry, state)
-
     def show(self, *, size: Geometry.IntSize=None, position: Geometry.IntPoint=None) -> None:
         super().show(size=size, position=position)
         ui_handler = self.__ui_handler
@@ -63,13 +63,13 @@ class DeclarativeWindow(Window.Window):
             self.__ui_handler.did_show()
 
     def close(self) -> None:
+        self.__closer.close()
         super().close()
-
 
 
 class Handler(Observable.Observable):
 
-    def __init__(self, qm: EELSQuantificationController.EELSQuantificationManager):
+    def __init__(self, document_controller: DocumentController.DocumentController, qm: EELSQuantificationController.EELSQuantificationManager):
         """
         Handle quantification being added or removed. the quantification selection should remain the same unless the
         selected quantification is deleted, in which case a default quantification should be chosen.
@@ -79,86 +79,197 @@ class Handler(Observable.Observable):
 
         super().__init__()
 
+        self.__document_controller = document_controller
         self.__eels_quantification_manager = qm
+        self.__eels_edges_model = qm.get_eels_edges_model_for_display_item()
 
-        self.eels_quantification_choices = Model.PropertyModel([])
-        self.eels_quantification_index = Model.PropertyModel(0)
+        def display_item_changed(display_item: DisplayItem.DisplayItem) -> None:
+            self.__eels_edges_model.set_display_item(display_item)
 
-        self.__selected_eels_quantification = None
+        self.__focused_display_item_changed_event_listener = document_controller.focused_display_item_changed_event.listen(display_item_changed)
 
-        if len(qm.eels_quantifications) == 0:
-            qm.create_eels_quantification()
+        def inserted(k, v, i):
+            if k == "eels_edges":
+                self.notify_insert_item("eels_edges", v, i)
 
-        def sync_quantification_choices():
-            eels_quantification_str = _("EELS Quantification")
-            self.eels_quantification_choices.value = [q.title or f"{eels_quantification_str} {i}" for i, q in enumerate(qm.eels_quantifications)]
+        self.__item_inserted_event_listener = self.__eels_edges_model.item_inserted_event.listen(inserted)
 
-        def sync_quantification(index: typing.Optional[int]) -> None:
-            if index is not None:
-                self.__selected_eels_quantification = self.__eels_quantification_manager.eels_quantifications[index]
-            else:
-                self.__selected_eels_quantification = None
-            self.notify_property_changed("eels_quantification_title")
-            self.notify_property_changed("eels_quantification_status")
+        def removed(k, v, i):
+            if k == "eels_edges":
+                self.notify_remove_item("eels_edges", v, i)
 
-        def eels_quantification_property_changed(property_name: str) -> None:
-            sync_quantification_choices()
+        self.__item_inserted_event_listener = self.__eels_edges_model.item_inserted_event.listen(inserted)
+        self.__item_removed_event_listener = self.__eels_edges_model.item_removed_event.listen(removed)
 
-        def eels_quantifications_item_inserted(key: str, value, before_index: int) -> None:
-            if key == "eels_quantification_data_structures":
-                eels_quantification = value
-                self.__eels_quantification_property_changed_listeners.insert(before_index, eels_quantification.property_changed_event.listen(eels_quantification_property_changed))
-                sync_quantification_choices()
-                if self.__selected_eels_quantification is not None:
-                    self.eels_quantification_index.value = self.__eels_quantification_manager.eels_quantifications.index(self.__selected_eels_quantification)
+        self.__eels_edges_model.set_display_item(document_controller.focused_display_item)
 
-        def eels_quantifications_item_removed(key: str, value, index: int) -> None:
-            if key == "eels_quantification_data_structures":
-                self.__eels_quantification_property_changed_listeners[index].close()
-                del self.__eels_quantification_property_changed_listeners[index]
-                sync_quantification_choices()
-                if self.__selected_eels_quantification in self.__eels_quantification_manager.eels_quantifications:
-                    self.eels_quantification_index.value = self.__eels_quantification_manager.eels_quantifications.index(self.__selected_eels_quantification)
-                elif len(self.__eels_quantification_manager.eels_quantifications) > 0:
-                    self.eels_quantification_index.value = 0
-                else:
-                    self.eels_quantification_index.value = None
-            if len(self.__eels_quantification_manager.eels_quantifications) == 0:
-                self.__request_close_fn()
-
-        self.__eels_quantifications_item_inserted_event_listener = qm.eels_quantifications_model.item_inserted_event.listen(eels_quantifications_item_inserted)
-        self.__eels_quantifications_item_removed_event_listener = qm.eels_quantifications_model.item_removed_event.listen(eels_quantifications_item_removed)
-        self.__eels_quantification_property_changed_listeners = list()
-
-        self.eels_quantification_index.on_value_changed = sync_quantification
-
-        for index, eels_quantification in enumerate(qm.eels_quantifications):
-            eels_quantifications_item_inserted("eels_quantification_data_structures", eels_quantification, index)
-
-        sync_quantification(self.eels_quantification_index.value)
+    def close(self) -> None:
+        self.__focused_display_item_changed_event_listener.close()
+        self.__focused_display_item_changed_event_listener = None
+        self.__item_inserted_event_listener.close()
+        self.__item_inserted_event_listener = None
+        self.__item_removed_event_listener.close()
+        self.__item_removed_event_listener = None
 
     def init_window(self, request_close_fn: typing.Callable[[], None]) -> None:
         self.__request_close_fn = request_close_fn
 
     @property
-    def eels_quantification_title(self) -> str:
-        return self.eels_quantification.title
+    def eels_edges(self) -> typing.List[EELSQuantificationController.EELSEdge]:
+        return list(self.__eels_edges_model.items)
 
-    @eels_quantification_title.setter
-    def eels_quantification_title(self, value: str) -> None:
-        self.eels_quantification.title = value
-        self.notify_property_changed("eels_quantification_title")
+    def create_handler(self, component_id: str, container=None, item=None, **kwargs):
+
+        class EELSEdgeSectionHandler:
+
+            def __init__(self, container, eels_edge: EELSQuantificationController.EELSEdge):
+                self.container = container
+                self.eels_edge = eels_edge
+                self.property_changed_event = Event.Event()
+
+                def property_changed(property_name: str) -> None:
+                    if property_name == "signal_eels_interval":
+                        self.property_changed_event.fire("signal_start")
+                        self.property_changed_event.fire("signal_end")
+
+                def item_inserted(key: str, value, before_index: int) -> None:
+                    if key == "fit_eels_intervals":
+                        self.property_changed_event.fire("fit1_start")
+                        self.property_changed_event.fire("fit1_end")
+                        self.property_changed_event.fire("fit2_start")
+                        self.property_changed_event.fire("fit2_end")
+
+                def item_removed(key: str, value, index: int) -> None:
+                    if key == "fit_eels_intervals":
+                        self.property_changed_event.fire("fit1_start")
+                        self.property_changed_event.fire("fit1_end")
+                        self.property_changed_event.fire("fit2_start")
+                        self.property_changed_event.fire("fit2_end")
+
+                def item_content_changed(key: str, value, index: int) -> None:
+                    if key == "fit_eels_intervals":
+                        self.property_changed_event.fire("fit1_start")
+                        self.property_changed_event.fire("fit1_end")
+                        self.property_changed_event.fire("fit2_start")
+                        self.property_changed_event.fire("fit2_end")
+
+                self.__property_changed_listener = self.eels_edge.property_changed_event.listen(property_changed)
+                self.__item_inserted_listener = self.eels_edge.item_inserted_event.listen(item_inserted)
+                self.__item_removed_listener = self.eels_edge.item_removed_event.listen(item_removed)
+                self.__item_content_changed_listener = self.eels_edge.item_content_changed_event.listen(item_content_changed)
+
+            def close(self) -> None:
+                self.__property_changed_listener.close()
+                self.__property_changed_listener = None
+                self.__item_inserted_listener.close()
+                self.__item_inserted_listener = None
+                self.__item_removed_listener.close()
+                self.__item_removed_listener = None
+                self.__item_content_changed_listener.close()
+                self.__item_content_changed_listener = None
+
+            def init_handler(self):
+                pass
+
+            @property
+            def is_displayed(self) -> bool:
+                return self.eels_edge.is_visible
+
+            @is_displayed.setter
+            def is_displayed(self, value: bool) -> None:
+                if value:
+                    self.eels_edge.show()
+                else:
+                    self.eels_edge.hide()
+
+            @property
+            def edge_index_label(self) -> str:
+                return f"EELS Edge #{self._index + 1}"
+
+            @property
+            def _index(self):
+                return self.container.eels_edges.index(self.eels_edge)
+
+            @property
+            def signal_start(self) -> str:
+                return f"{self.eels_edge.signal_eels_interval.start_ev:0.2f}"
+
+            @signal_start.setter
+            def signal_start(self, value: str) -> None:
+                f_value = None
+                try:
+                    f_value = float(value)
+                except ValueError as e:
+                    pass
+                if f_value is not None:
+                    eels_interval = self.eels_edge.signal_eels_interval
+                    eels_interval.start_ev = float(value)
+                    self.eels_edge.signal_eels_interval = eels_interval
+
+            @property
+            def signal_end(self) -> str:
+                return f"{self.eels_edge.signal_eels_interval.end_ev:0.2f}"
+
+            @signal_end.setter
+            def signal_end(self, value: str) -> None:
+                f_value = None
+                try:
+                    f_value = float(value)
+                except ValueError as e:
+                    pass
+                if f_value is not None:
+                    eels_interval = self.eels_edge.signal_eels_interval
+                    eels_interval.end_ev = float(value)
+                    self.eels_edge.signal_eels_interval = eels_interval
+
+            @property
+            def fit1_start(self) -> str:
+                if len(self.eels_edge.fit_eels_intervals) > 0:
+                    return f"{self.eels_edge.fit_eels_intervals[0].start_ev:0.2f}"
+                return str()
+
+            @property
+            def fit1_end(self) -> str:
+                if len(self.eels_edge.fit_eels_intervals) > 0:
+                    return f"{self.eels_edge.fit_eels_intervals[0].end_ev:0.2f}"
+                return str()
+
+            @property
+            def fit2_start(self) -> str:
+                if len(self.eels_edge.fit_eels_intervals) > 1:
+                    return f"{self.eels_edge.fit_eels_intervals[1].start_ev:0.2f}"
+                return str()
+
+            @property
+            def fit2_end(self) -> str:
+                if len(self.eels_edge.fit_eels_intervals) > 1:
+                    return f"{self.eels_edge.fit_eels_intervals[1].end_ev:0.2f}"
+                return str()
+
+        if component_id == "eels_edge":
+            return EELSEdgeSectionHandler(container, item)
+
+        return None
 
     @property
-    def eels_quantification_status(self) -> str:
-        return f"{len(self.eels_quantification.eels_edges)} {len(self.__eels_quantification_manager.get_eels_quantification_displays(self.eels_quantification))}"
+    def resources(self) -> typing.Dict:
+        u = Declarative.DeclarativeUI()
 
-    @property
-    def eels_quantification(self) -> EELSQuantificationController.EELSQuantification:
-        return self.__eels_quantification_manager.eels_quantifications[self.eels_quantification_index.value]
+        title_row = u.create_row(u.create_label(text="@binding(edge_index_label)"), u.create_stretch(), spacing=8)
 
-    def delete_eels_quantification(self, widget=None) -> None:
-        self.__eels_quantification_manager.destroy_eels_quantification(self.eels_quantification)
+        is_displayed_row = u.create_row(u.create_check_box(text=_("Displayed"), checked="@binding(is_displayed)"), u.create_stretch(), spacing=8)
+
+        signal_row = u.create_row(u.create_label(text=_("Signal")), u.create_line_edit(text="@binding(signal_start)", width=60), u.create_line_edit(text="@binding(signal_end)", width=60), u.create_label(text="eV"), u.create_stretch(), spacing=8)
+
+        fit1_row = u.create_row(u.create_label(text=_("Fit 1")), u.create_line_edit(text="@binding(fit1_start)", width=60), u.create_line_edit(text="@binding(fit1_end)", width=60), u.create_label(text="eV"), u.create_stretch(), spacing=8)
+
+        fit2_row = u.create_row(u.create_label(text=_("Fit 2")), u.create_line_edit(text="@binding(fit2_start)", width=60), u.create_line_edit(text="@binding(fit2_end)", width=60), u.create_label(text="eV"), u.create_stretch(), spacing=8)
+
+        column = u.create_column(u.create_spacing(8), title_row, is_displayed_row, signal_row, fit1_row, fit2_row, spacing=8)
+
+        component = u.define_component(content=column, component_id="eels_edge")
+
+        return {"eels_edge": component}
 
 
 def open_eels_quantification_window(document_controller: DocumentController.DocumentController):
@@ -166,27 +277,15 @@ def open_eels_quantification_window(document_controller: DocumentController.Docu
 
     qm = EELSQuantificationController.EELSQuantificationManager.get_instance(document_model)
 
-    ui_handler = Handler(qm)
+    ui_handler = Handler(document_controller, qm)
 
     u = Declarative.DeclarativeUI()
 
-    eels_quantification_choice = u.create_combo_box(items_ref="@binding(eels_quantification_choices.value)", current_index="@binding(eels_quantification_index.value)", width=200)
+    edges_column = u.create_column(items="eels_edges", item_component_id="eels_edge")
 
-    delete_button = u.create_push_button(text=_("Delete"), on_clicked="delete_eels_quantification")
-
-    eels_quantification_choice_row = u.create_row(eels_quantification_choice, u.create_stretch(), delete_button, u.create_push_button(text=_("Copy")), u.create_push_button(text=_("New")), spacing=4)
-
-    eels_quantification_title_edit = u.create_line_edit(text="@binding(eels_quantification_title)")
-
-    eels_quantification_edit_row = u.create_row(eels_quantification_title_edit, u.create_stretch(), spacing=4)
-
-    eels_quantification_status_row = u.create_row(u.create_label(text="@binding(eels_quantification_status)"), u.create_stretch(), spacing=4)
-
-    column = u.create_column(eels_quantification_choice_row, eels_quantification_edit_row, eels_quantification_status_row, u.create_stretch(), spacing=4, margin=8)
+    column = u.create_column(edges_column, u.create_stretch(), margin=8)
 
     window = DeclarativeWindow(document_controller, column, ui_handler)
     window.show()
-
-    print(f"title = {ui_handler.eels_quantification_title} / {ui_handler.eels_quantification} / {ui_handler.eels_quantification.title}")
 
     document_controller.register_dialog(window)
